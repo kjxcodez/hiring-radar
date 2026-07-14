@@ -59,26 +59,26 @@ def discover(
         str,
         typer.Option(
             "--sources",
-            help="Comma-separated list of sources to query.",
+            help="Comma-separated list of ATS platforms / feeds to query. Default: 'greenhouse,lever,remoteok,wwr'.",
         ),
     ] = "greenhouse,lever,remoteok,wwr",
     seed_file: Annotated[
         Optional[Path],
         typer.Option(
             "--seed-file",
-            help="Optional file of known company slugs/domains to start from.",
-            exists=False,   # allow non-existent path at parse time; validate in impl
+            help="Optional file of manually-noted company names to resolve on ATS platforms. Default: None.",
+            exists=False,
         ),
     ] = None,
     limit: Annotated[
         int,
-        typer.Option("--limit", help="Maximum number of companies to collect."),
+        typer.Option("--limit", help="Maximum number of companies to collect and output. Default: 100."),
     ] = 100,
     profile: Annotated[
         Optional[str],
         typer.Option(
             "--profile",
-            help="Name of search profile to use for filtering (e.g. frontend).",
+            help="Name of search profile to use for filtering (e.g. 'frontend'). Default: None.",
         ),
     ] = None,
 ) -> None:
@@ -95,7 +95,10 @@ def discover(
             console.print(f"  [dim]Exclude:[/dim]   {loaded_prof.exclude}")
             console.print()
         except Exception as exc:
-            console.print(f"[red]Error loading profile '{profile}':[/red] {exc}")
+            console.print(
+                f"[red]Error: Failed to load search profile '{profile}': {exc}[/red]\n"
+                "What to do next: Verify that profiles/{profile}.yaml exists and is valid YAML, or list profiles."
+            )
             raise typer.Exit(code=1) from exc
 
     source_list = [s.strip() for s in sources.split(",") if s.strip()]
@@ -104,8 +107,8 @@ def discover(
     unknown = [s for s in source_list if s not in SOURCE_REGISTRY]
     if unknown:
         console.print(
-            f"[red]Unknown source(s): {', '.join(unknown)}[/red]\n"
-            f"Available: {', '.join(SOURCE_REGISTRY)}"
+            f"[red]Error: Unknown source(s): {', '.join(unknown)}[/red]\n"
+            "What to do next: Use only valid sources: greenhouse, lever, remoteok, wwr, ashby, workable, bamboohr."
         )
         raise typer.Exit(code=1)
 
@@ -218,21 +221,21 @@ def scrape(
         Path,
         typer.Option(
             "--input",
-            help="Path to companies.json produced by `discover`.",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
         ),
     ] = settings.output_dir / "companies.json",
     company: Annotated[
         Optional[str],
         typer.Option(
             "--company",
-            help="Single company name (case-insensitive substring) for targeted debugging.",
+            help="Filters run to a single company name (case-insensitive substring) for targeted debugging. Default: None.",
         ),
     ] = None,
     force: Annotated[
         bool,
         typer.Option(
             "--force/--no-force",
-            help="Re-scrape even companies that already have contact data.",
+            help="Force scraper to re-process companies even if they already have contact data or were scraped in the last 7 days. Default: False.",
         ),
     ] = False,
 ) -> None:
@@ -241,7 +244,10 @@ def scrape(
 
     # --- Load ---
     if not input.exists():
-        console.print(f"[red]Input file not found:[/red] {input}")
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' first to collect companies and populate the database."
+        )
         raise typer.Exit(code=1)
 
     try:
@@ -250,7 +256,10 @@ def scrape(
             for c in orjson.loads(input.read_bytes())
         ]
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Failed to load {input}:[/red] {exc}")
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON file is not corrupted or rerun 'hiring-radar discover'."
+        )
         raise typer.Exit(code=1) from exc
 
     # --- Filter ---
@@ -364,25 +373,25 @@ def scrape(
 def enrich(
     input: Annotated[
         Path,
-        typer.Option("--input", help="Path to companies.json to enrich."),
+        typer.Option("--input", help="Path to the JSON database/source file. Default: output/companies.json."),
     ] = settings.output_dir / "companies.json",
     provider: Annotated[
         str,
-        typer.Option("--provider", help="LLM provider to use."),
+        typer.Option("--provider", help="AI LLM provider to utilize. Default: 'openrouter'."),
     ] = "openrouter",
     model: Annotated[
         Optional[str],
-        typer.Option("--model", help="Override the LLM model (default from settings)."),
+        typer.Option("--model", help="Override the default LLM model specified in Settings. Default: None."),
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run/--no-dry-run", help="Preview without writing output."),
+        typer.Option("--dry-run/--no-dry-run", help="Preview prompt templates and logs without making OpenRouter calls. Default: False."),
     ] = False,
     force: Annotated[
         bool,
         typer.Option(
             "--force/--no-force",
-            help="Re-enrich even companies that already have AI summaries.",
+            help="Force LLM enrichment even for companies that already have AI summaries. Default: False.",
         ),
     ] = False,
 ) -> None:
@@ -391,12 +400,18 @@ def enrich(
 
     provider_lower = provider.lower().strip()
     if provider_lower != "openrouter":
-        console.print(f"[red]Error:[/red] Supported provider is only 'openrouter', got '{provider_lower}'.")
+        console.print(
+            f"[red]Error: Supported provider is only 'openrouter', got '{provider_lower}'.[/red]\n"
+            "What to do next: Please specify '--provider openrouter' or omit the option."
+        )
         raise typer.Exit(code=1)
 
     # 1. Load companies
     if not input.exists():
-        console.print(f"[red]Input file not found:[/red] {input}")
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' before attempting enrichment."
+        )
         raise typer.Exit(code=1)
 
     try:
@@ -405,7 +420,10 @@ def enrich(
             for c in orjson.loads(input.read_bytes())
         ]
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Failed to load {input}:[/red] {exc}")
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON file is not corrupted or rerun 'hiring-radar discover'."
+        )
         raise typer.Exit(code=1) from exc
 
     # 2. Filter companies to enrich
@@ -505,19 +523,19 @@ def export(
         str,
         typer.Option(
             "--format",
-            help="Output format: 'csv' or 'json'.",
+            help="Export format: 'csv' or 'json'. Default: 'json'.",
             case_sensitive=False,
         ),
     ] = "json",
     output: Annotated[
         Optional[Path],
-        typer.Option("--output", help="Destination file (default: auto-named in output/)."),
+        typer.Option("--output", help="Destination file path. Default: auto-named in output/."),
     ] = None,
     granularity: Annotated[
         str,
         typer.Option(
             "--granularity",
-            help="Export unit (CSV only): 'company' (one row per company) or 'job' (one row per job).",
+            help="Export unit (CSV only): 'company' (one row per company) or 'job' (one row per job). Default: 'company'.",
             case_sensitive=False,
         ),
     ] = "company",
@@ -527,11 +545,15 @@ def export(
     granularity_lower = granularity.lower().strip()
 
     if format_lower not in ("csv", "json"):
-        console.print(f"[red]Error:[/red] --format must be 'csv' or 'json', got '{format_lower}'.")
+        console.print(
+            f"[red]Error: --format must be 'csv' or 'json', got '{format_lower}'.[/red]\n"
+            "What to do next: Specify '--format csv' or '--format json'."
+        )
         raise typer.Exit(code=1)
     if granularity_lower not in ("company", "job"):
         console.print(
-            f"[red]Error:[/red] --granularity must be 'company' or 'job', got '{granularity_lower}'."
+            f"[red]Error: --granularity must be 'company' or 'job', got '{granularity_lower}'.[/red]\n"
+            "What to do next: Specify '--granularity company' or '--granularity job'."
         )
         raise typer.Exit(code=1)
 
@@ -539,10 +561,10 @@ def export(
     companies_file = settings.output_dir / "companies.json"
     if not companies_file.exists():
         console.print()
-        console.print("[bold red]No data to export.[/bold red]")
+        console.print("[bold red]Error: No data to export.[/bold red]")
         console.print(
             f"  [dim]{companies_file}[/dim] does not exist.\n"
-            "  Run [bold]hiring-radar discover[/bold] and [bold]hiring-radar scrape[/bold] first."
+            "  What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' first to gather data before exporting."
         )
         console.print()
         raise typer.Exit(code=1)
@@ -550,11 +572,17 @@ def export(
     try:
         raw_list: list[dict] = orjson.loads(companies_file.read_bytes())
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Failed to read {companies_file}:[/red] {exc}")
+        console.print(
+            f"[red]Error: Failed to read database from '{companies_file}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON database file is not corrupted."
+        )
         raise typer.Exit(code=1) from exc
 
     if not isinstance(raw_list, list):
-        console.print(f"[red]Expected a JSON array in {companies_file}.[/red]")
+        console.print(
+            f"[red]Error: Expected a JSON array in '{companies_file}'.[/red]\n"
+            "What to do next: Ensure the file is not corrupted."
+        )
         raise typer.Exit(code=1)
 
     # 2. Validate into list[Company]
@@ -713,6 +741,42 @@ def status() -> None:
 
     console.print(f"\n  [dim]Source:[/dim] {companies_file}")
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 6. examples
+# ---------------------------------------------------------------------------
+
+@app.command()
+def examples() -> None:
+    """Show common CLI command invocations and examples."""
+    from rich.panel import Panel
+
+    examples_text = (
+        "[bold cyan]hiring-radar discover --profile frontend[/bold cyan]\n"
+        "[dim]Discover hiring companies using a search profile named 'frontend'[/dim]\n\n"
+        "[bold cyan]hiring-radar discover --sources greenhouse,lever --limit 50[/bold cyan]\n"
+        "[dim]Limit discovery to Greenhouse & Lever sources, scraping up to 50 companies[/dim]\n\n"
+        "[bold cyan]hiring-radar scrape --company linear[/bold cyan]\n"
+        "[dim]Fetch career page details and contacts for 'linear' company only[/dim]\n\n"
+        "[bold cyan]hiring-radar enrich --dry-run[/bold cyan]\n"
+        "[dim]Dry-run AI enrichment to preview OpenRouter prompt formatting[/dim]\n\n"
+        "[bold cyan]hiring-radar export --format csv --granularity job[/bold cyan]\n"
+        "[dim]Export all processed results to CSV formatted with one row per job[/dim]\n\n"
+        "[bold cyan]hiring-radar status[/bold cyan]\n"
+        "[dim]View data collection metrics and top 5 most recently discovered companies[/dim]"
+    )
+
+    panel = Panel(
+        examples_text,
+        title="[bold magenta]hiring-radar CLI Examples[/bold magenta]",
+        expand=False,
+        border_style="cyan"
+    )
+    console.print()
+    console.print(panel)
+    console.print()
+
 
 
 # ---------------------------------------------------------------------------
