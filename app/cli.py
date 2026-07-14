@@ -17,6 +17,7 @@ from rich.table import Table
 
 from app.config import settings
 from app.discover import SOURCE_REGISTRY
+from app.discover import remoteok as _remoteok_mod
 from app.discover.seed import load_seed_slugs
 from app.models import Company
 from app.utils import setup_logging
@@ -94,16 +95,26 @@ def discover(
     # --- Discover per source ---
     all_new: list[Company] = []
     for src in source_list:
-        slugs = seed_map.get(src, [])
-        if not slugs:
-            console.print(
-                f"  [yellow]⚠[/yellow]  No slugs for [bold]{src}[/bold] — "
-                f"add them to [dim]output/seed_slugs_{src}.txt[/dim] and re-run."
-            )
-            continue
-        console.print(f"  Querying [bold]{src}[/bold] with {len(slugs)} slug(s)…")
+        console.print(f"  Querying [bold]{src}[/bold]…")
         try:
-            discovered = SOURCE_REGISTRY[src](slugs)
+            # --- remoteok: single global feed, different signature ---
+            # remoteok.discover(limit) takes a job-count limit, not a slug list.
+            # Branch here explicitly rather than forcing a unified signature.
+            if src == "remoteok":
+                discovered = _remoteok_mod.discover(limit=limit)
+
+            # --- slug-based ATS sources (greenhouse, lever, wwr, …) ---
+            else:
+                slugs = seed_map.get(src, [])
+                if not slugs:
+                    console.print(
+                        f"  [yellow]⚠[/yellow]  No slugs for [bold]{src}[/bold] — "
+                        f"add them to [dim]output/seed_slugs_{src}.txt[/dim] and re-run."
+                    )
+                    continue
+                console.print(f"    ({len(slugs)} slug(s) loaded)")
+                discovered = SOURCE_REGISTRY[src](slugs)
+
             all_new.extend(discovered)
             console.print(f"  [green]✓[/green]  {src}: {len(discovered)} company/companies found")
         except Exception as exc:  # noqa: BLE001
