@@ -16,6 +16,9 @@ from rich.console import Console
 from rich.table import Table
 
 from app.config import settings
+from app.discover import SOURCE_REGISTRY
+from app.discover.seed import load_seed_slugs
+from app.models import Company
 from app.utils import setup_logging
 
 # ---------------------------------------------------------------------------
@@ -67,20 +70,94 @@ def discover(
     """Collect hiring companies from public ATS APIs and job boards."""
     source_list = [s.strip() for s in sources.split(",") if s.strip()]
 
+    # --- Validate sources ---
+    unknown = [s for s in source_list if s not in SOURCE_REGISTRY]
+    if unknown:
+        console.print(
+            f"[red]Unknown source(s): {', '.join(unknown)}[/red]\n"
+            f"Available: {', '.join(SOURCE_REGISTRY)}"
+        )
+        raise typer.Exit(code=1)
+
+    # --- Load seed slugs ---
+    # seed_file overrides per-source txt files when provided.
+    seed_map: dict[str, list[str]] = load_seed_slugs(source_list)
+    if seed_file and seed_file.exists():
+        override_slugs = [
+            ln.strip()
+            for ln in seed_file.read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        seed_map = {src: override_slugs for src in source_list}
+        console.print(f"  [dim]Using seed file:[/dim] {seed_file} ({len(override_slugs)} slug(s))")
+
+    # --- Discover per source ---
+    all_new: list[Company] = []
+    for src in source_list:
+        slugs = seed_map.get(src, [])
+        if not slugs:
+            console.print(
+                f"  [yellow]⚠[/yellow]  No slugs for [bold]{src}[/bold] — "
+                f"add them to [dim]output/seed_slugs_{src}.txt[/dim] and re-run."
+            )
+            continue
+        console.print(f"  Querying [bold]{src}[/bold] with {len(slugs)} slug(s)…")
+        try:
+            discovered = SOURCE_REGISTRY[src](slugs)
+            all_new.extend(discovered)
+            console.print(f"  [green]✓[/green]  {src}: {len(discovered)} company/companies found")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [red]✗[/red]  {src}: error during discovery — {exc}")
+
+    # --- Load existing companies.json (for incremental runs) ---
+    companies_file = settings.output_dir / "companies.json"
+    existing: list[Company] = []
+    if companies_file.exists():
+        try:
+            raw = orjson.loads(companies_file.read_bytes())
+            existing = [Company.model_validate(c) for c in raw]
+            console.print(f"  [dim]Loaded {len(existing)} existing company/companies from {companies_file}[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [yellow]⚠[/yellow]  Could not load existing data ({exc}) — starting fresh.")
+
+    # --- Deduplicate and merge ---
+    merged: dict[str, Company] = {c.dedupe_key(): c for c in existing}
+    for new_co in all_new:
+        key = new_co.dedupe_key()
+        if key in merged:
+            # Merge job lists, preferring new jobs (by URL uniqueness)
+            existing_urls = {j.job_url for j in merged[key].jobs}
+            merged[key].jobs.extend(j for j in new_co.jobs if j.job_url not in existing_urls)
+            merged[key].last_updated = new_co.last_updated
+        else:
+            merged[key] = new_co
+
+    final: list[Company] = list(merged.values())[:limit]
+
+    # --- Write output ---
+    total_jobs = sum(len(c.jobs) for c in final)
+    try:
+        companies_file.write_bytes(
+            orjson.dumps(
+                [c.model_dump(mode="json") for c in final],
+                option=orjson.OPT_INDENT_2,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to write {companies_file}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # --- Summary ---
     console.print()
-    console.print("[bold yellow]⚠  discover — not implemented yet[/bold yellow]")
-    console.print()
-    console.print(f"  [dim]Sources requested:[/dim] {', '.join(source_list)}")
-    console.print(f"  [dim]Limit:[/dim]            {limit}")
-    if seed_file:
-        console.print(f"  [dim]Seed file:[/dim]        {seed_file}")
-    console.print()
-    console.print(
-        "  This command will query each source, deduplicate results, and write"
-        " [bold]output/companies.json[/bold]."
-    )
-    console.print()
-    raise typer.Exit(code=0)
+    table = Table(title="discover — results", show_header=True)
+    table.add_column("Metric", style="bold cyan", no_wrap=True)
+    table.add_column("Value", justify="right", style="bold white")
+    table.add_row("Sources queried", str(len(source_list)))
+    table.add_row("New companies found", str(len(all_new)))
+    table.add_row("Total companies written", str(len(final)))
+    table.add_row("Total job listings", str(total_jobs))
+    console.print(table)
+    console.print(f"\n  [dim]Output:[/dim] {companies_file}\n")
 
 
 # ---------------------------------------------------------------------------
