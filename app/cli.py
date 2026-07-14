@@ -28,6 +28,7 @@ from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
+from app.outreach import generate_email
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
@@ -1024,6 +1025,114 @@ def search_list() -> None:
     console.print()
     console.print(table)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 8. preview
+# ---------------------------------------------------------------------------
+
+@app.command()
+def preview(
+    company_name: str = typer.Argument(..., help="Name of the company to preview the email for (case-insensitive substring match)."),
+    template: Annotated[
+        str,
+        typer.Option(
+            "--template",
+            help="Email template name to use (e.g. 'startup', 'founder'). Default: 'startup'.",
+        ),
+    ] = "startup",
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="LLM model override for OpenRouter calls. Default: None.",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+) -> None:
+    """Generate and display a cold email preview for a single company."""
+    from rich.panel import Panel
+
+    # 1. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' before attempting preview."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON file is not corrupted."
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 2. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+
+    # 3. Generate email (not dry run)
+    console.print(f"Generating email for [bold cyan]{co.name}[/bold cyan] using template '{template}'…")
+    try:
+        res = generate_email(co, template_name=template, model=model, dry_run=False)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to generate email: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if not res["body"]:
+        console.print("[red]Error: Generated email body was empty. Check OpenRouter API key and settings.[/red]")
+        raise typer.Exit(code=1)
+
+    # 4. Display output
+    recipient = co.recruiter_email or (co.generic_emails[0] if co.generic_emails else "(no email found — see `jobs scrape`)")
+
+    content = (
+        f"[bold]To:[/bold] {recipient}\n"
+        f"[bold]Subject:[/bold] {res['subject']}\n\n"
+        f"{res['body']}"
+    )
+
+    panel = Panel(
+        content,
+        title=f"[bold magenta]Outreach Preview: {co.name}[/bold magenta]",
+        subtitle=f"[dim]Template: {res['template_used']}[/dim]",
+        expand=False,
+        border_style="cyan"
+    )
+    console.print()
+    console.print(panel)
+    console.print()
+
 
 
 
