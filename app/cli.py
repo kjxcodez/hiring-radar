@@ -7,7 +7,7 @@ Run as:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -28,7 +28,7 @@ from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
-from app.outreach import generate_email, send_test_email
+from app.outreach import generate_email, send_test_email, send_email
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
@@ -1115,11 +1115,16 @@ def preview(
 
     # 4. Display output
     recipient = co.recruiter_email or (co.generic_emails[0] if co.generic_emails else "(no email found — see `jobs scrape`)")
+    _render_preview_panel(co.name, recipient, res["subject"], res["body"], res["template_used"])
+
+
+def _render_preview_panel(company_name: str, recipient: str, subject: str, body: str, template_used: str) -> None:
+    from rich.panel import Panel
 
     content = (
         f"[bold]To:[/bold] {recipient}\n"
-        f"[bold]Subject:[/bold] {res['subject']}\n\n"
-        f"{res['body']}"
+        f"[bold]Subject:[/bold] {subject}\n\n"
+        f"{body}"
     )
 
     panel = Panel(
@@ -1132,6 +1137,213 @@ def preview(
     console.print()
     console.print(panel)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 10. send
+# ---------------------------------------------------------------------------
+
+@app.command(name="send")
+def outreach_send(
+    score: Annotated[
+        Optional[float],
+        typer.Option(
+            "--score",
+            help="Filter companies with a numeric score greater than or equal to this. Default: None.",
+        ),
+    ] = None,
+    company: Annotated[
+        Optional[str],
+        typer.Option(
+            "--company",
+            help="Filter run to a single company name (case-insensitive substring match). Default: None.",
+        ),
+    ] = None,
+    template: Annotated[
+        str,
+        typer.Option(
+            "--template",
+            help="Email template name to use (e.g. 'startup', 'founder'). Default: 'startup'.",
+        ),
+    ] = "startup",
+    confirm: Annotated[
+        bool,
+        typer.Option(
+            "--confirm/--no-confirm",
+            help="Interactive per-email confirmation gate. If False, runs in dry-preview mode. Default: False.",
+        ),
+    ] = False,
+    resend: Annotated[
+        bool,
+        typer.Option(
+            "--resend/--no-resend",
+            help="Resend emails even to companies already marked as sent. Default: False.",
+        ),
+    ] = False,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="LLM model override for OpenRouter calls. Default: None.",
+        ),
+    ] = None,
+) -> None:
+    """Run batch cold email outreach with mandatory interactive confirmation."""
+    # 1. Load database
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' before attempting outreach."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON file is not corrupted."
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 2. Filter companies
+    # Score warning if score option is passed but no score field is on the Company model
+    if score is not None:
+        if "score" not in Company.model_fields:
+            logger.warning("no score data available, --score ignored, sending to all matches")
+
+    targets: list[Company] = []
+    skipped_no_email = 0
+    skipped_already_sent = 0
+
+    for c in all_companies:
+        # Company name filter
+        if company and company.lower() not in c.name.lower():
+            continue
+
+        # Score filter (if Company has a score field)
+        if score is not None and "score" in Company.model_fields:
+            comp_score = getattr(c, "score", None)
+            if comp_score is None or comp_score < score:
+                continue
+
+        # Usable recipient email filter
+        recipient = c.recruiter_email or (c.generic_emails[0] if c.generic_emails else None)
+        if not recipient:
+            skipped_no_email += 1
+            logger.info("outreach/send/{company}: skipped (no recipient email found)", company=c.name)
+            continue
+
+        # Already sent filter
+        has_sent_note = any(n.startswith("email_sent:") for n in c.notes)
+        if has_sent_note and not resend:
+            skipped_already_sent += 1
+            logger.info("outreach/send/{company}: skipped (email already marked as sent)", company=c.name)
+            continue
+
+        targets.append(c)
+
+    if not targets:
+        console.print()
+        console.print("[yellow]No target companies found matching current outreach filters.[/yellow]")
+        console.print(f"  Skipped (no email):       {skipped_no_email}")
+        console.print(f"  Skipped (already sent):   {skipped_already_sent}")
+        console.print()
+        raise typer.Exit(code=0)
+
+    # 3. Process batch
+    previewed_count = 0
+    sent_count = 0
+    declined_count = 0
+
+    rate_limiter = RateLimiter()
+
+    for idx, co in enumerate(targets, start=1):
+        recipient = co.recruiter_email or co.generic_emails[0]
+
+        console.print(f"Processing target [bold cyan]{co.name}[/bold cyan] ({idx}/{len(targets)})…")
+
+        try:
+            res = generate_email(co, template_name=template, model=model, dry_run=False)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]✗ Failed to generate email for {co.name}: {exc}[/red]")
+            continue
+
+        if not res["body"]:
+            console.print(f"[red]✗ Failed to generate email body for {co.name}.[/red]")
+            continue
+
+        # Display preview
+        _render_preview_panel(co.name, recipient, res["subject"], res["body"], res["template_used"])
+
+        # Decide whether to send
+        if not confirm:
+            previewed_count += 1
+            console.print(
+                f"[yellow]  (dry preview {idx}/{len(targets)} — pass --confirm to actually enable sending gate)[/yellow]\n"
+            )
+        else:
+            send_approval = typer.confirm(f"Send this email to {recipient}?")
+            if not send_approval:
+                declined_count += 1
+                console.print("[yellow]  Email declined by user.[/yellow]\n")
+            else:
+                # Respect request_delay_seconds (using "smtp" pseudo-domain)
+                rate_limiter.wait("smtp")
+
+                console.print(f"  Sending email to {recipient}…")
+                try:
+                    success = send_email(recipient, res["subject"], res["body"])
+                    if success:
+                        sent_count += 1
+                        co.notes.append(f"email_sent: {date.today().isoformat()} via {template}")
+                        co.last_updated = datetime.now()
+                        console.print("[green]  ✓ Sent successfully![/green]\n")
+                    else:
+                        console.print("[red]  ✗ SMTP delivery failed.[/red]\n")
+                except Exception as exc:
+                    console.print(f"[red]  ✗ SMTP connection failed: {exc}[/red]\n")
+
+    # 4. Write back database changes
+    try:
+        input.write_bytes(
+            orjson.dumps(
+                [c.model_dump(mode="json") for c in all_companies],
+                option=orjson.OPT_INDENT_2,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to update database {input}: {exc}[/red]")
+
+    # 5. Print Summary
+    console.print()
+    table = Table(title="outreach send — batch results", show_header=True, header_style="bold magenta")
+    table.add_column("Metric", style="bold cyan", no_wrap=True)
+    table.add_column("Count", justify="right", style="bold white")
+
+    table.add_row("Total targets matched", str(len(targets)))
+    table.add_row("Emails previewed only (dry)", str(previewed_count))
+    table.add_row("Emails successfully sent", str(sent_count))
+    table.add_row("Emails declined by user", str(declined_count))
+    table.add_row("Skipped (no email address)", str(skipped_no_email))
+    table.add_row("Skipped (already sent previously)", str(skipped_already_sent))
+
+    console.print(table)
+    console.print(f"\n  [dim]Database updated:[/dim] {input}\n")
+
+
+# ---------------------------------------------------------------------------
+
 
 
 # ---------------------------------------------------------------------------
