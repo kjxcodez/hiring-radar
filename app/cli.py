@@ -1542,6 +1542,132 @@ def watch_loop(
 
 
 # ---------------------------------------------------------------------------
+# 13. digest
+# ---------------------------------------------------------------------------
+
+@app.command(name="digest")
+def outreach_digest(
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    send: Annotated[
+        bool,
+        typer.Option(
+            "--send/--no-send",
+            help="Post the generated digest to Telegram via the bot. Default: False.",
+        ),
+    ] = False,
+) -> None:
+    """Generate a daily cold outreach hiring digest and optionally send to Telegram."""
+    import re
+    from datetime import datetime, timedelta
+
+    # 1. Load database
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' to collect data first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]\n"
+            "What to do next: Ensure the JSON file is not corrupted."
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 2. Filter to last 24 hours
+    window_start = datetime.now() - timedelta(hours=24)
+    recent_companies: list[Company] = []
+    for c in all_companies:
+        c_time = c.discovered_at.replace(tzinfo=None) if c.discovered_at.tzinfo else c.discovered_at
+        if c_time >= window_start:
+            recent_companies.append(c)
+
+    # 3. Compute metrics
+    total_companies = len(recent_companies)
+    total_jobs = sum(len(c.jobs) for c in recent_companies)
+
+    # Note: this is a rough keyword-based heuristic, not authoritative categorization.
+    ai_pattern = re.compile(r'\b(ai|ml|nlp|computer vision)\b|artificial intelligence|machine learning|deep learning', re.IGNORECASE)
+    backend_pattern = re.compile(r'\b(backend|back-end|python|go|golang|rust|java|node|django|fastapi|c\+\+|c#|\.net|ruby|rails)\b', re.IGNORECASE)
+    frontend_pattern = re.compile(r'\b(frontend|front-end|react|next\.js|nextjs|typescript|javascript|vue|angular|ui|ux|css|html)\b', re.IGNORECASE)
+
+    ai_count = 0
+    backend_count = 0
+    frontend_count = 0
+    other_count = 0
+
+    for c in recent_companies:
+        for j in c.jobs:
+            title = j.job_title
+            if ai_pattern.search(title):
+                ai_count += 1
+            elif frontend_pattern.search(title):
+                frontend_count += 1
+            elif backend_pattern.search(title):
+                backend_count += 1
+            else:
+                other_count += 1
+
+    # Sort recent companies by job count descending
+    # Note: Top picks currently use job count as a simple proxy for active hiring.
+    # This should be replaced with actual score-based ranking once Phase 10 (Scoring/Prioritization) lands.
+    top_picks = sorted(recent_companies, key=lambda c: len(c.jobs), reverse=True)[:5]
+
+    # 4. Format Markdown
+    top_picks_lines = []
+    for idx, c in enumerate(top_picks, start=1):
+        top_picks_lines.append(f"{idx}. {c.name} — {len(c.jobs)} new jobs")
+    top_picks_str = "\n".join(top_picks_lines) if top_picks_lines else "None"
+
+    digest_text = (
+        f"☀️ *Daily Hiring Digest*\n\n"
+        f"{total_companies} new companies · {total_jobs} new jobs\n\n"
+        f"🤖 AI/ML: {ai_count}\n"
+        f"🔧 Backend: {backend_count}\n"
+        f"🎨 Frontend: {frontend_count}\n"
+        f"📋 Other: {other_count}\n\n"
+        f"*Top picks:*\n"
+        f"{top_picks_str}"
+    )
+
+    # 5. Send or print
+    if send:
+        console.print("Posting daily hiring digest to Telegram…")
+        success = send_telegram_message(digest_text)
+        if success:
+            console.print("[bold green]✓ Daily digest posted successfully to Telegram![/bold green]")
+        else:
+            console.print("[bold red]✗ Failed to post daily digest to Telegram.[/bold red]")
+
+    # Either way, print to console
+    from rich.panel import Panel
+    panel = Panel(
+        digest_text,
+        title="[bold magenta]Daily Hiring Digest[/bold magenta]",
+        expand=False,
+        border_style="cyan"
+    )
+    console.print()
+    console.print(panel)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
