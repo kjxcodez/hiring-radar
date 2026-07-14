@@ -311,9 +311,10 @@ def export(
 
 @app.command()
 def status() -> None:
-    """Show a summary of locally collected data."""
+    """Show a rich summary of locally collected data (read-only)."""
     companies_file = settings.output_dir / "companies.json"
 
+    # --- Load ---
     if not companies_file.exists():
         console.print()
         console.print("[bold red]No data found.[/bold red]")
@@ -324,36 +325,81 @@ def status() -> None:
         console.print()
         raise typer.Exit(code=0)
 
-    raw = companies_file.read_bytes()
     try:
-        data: list[dict] = orjson.loads(raw)
+        raw_list: list[dict] = orjson.loads(companies_file.read_bytes())
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Failed to parse {companies_file}:[/red] {exc}")
+        console.print(f"[red]Failed to read {companies_file}:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    if not isinstance(data, list):
+    if not isinstance(raw_list, list):
         console.print(f"[red]Expected a JSON array in {companies_file}.[/red]")
         raise typer.Exit(code=1)
 
-    total = len(data)
-    with_jobs = sum(1 for c in data if c.get("jobs"))
-    with_email = sum(
-        1 for c in data
-        if c.get("generic_emails") or c.get("recruiter_email")
-    )
-    with_ai = sum(1 for c in data if c.get("ai_summary"))
+    # Parse into typed models so all field access is safe and validated.
+    companies: list[Company] = []
+    parse_errors = 0
+    for raw in raw_list:
+        try:
+            companies.append(Company.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            parse_errors += 1
 
-    table = Table(title="hiring-radar · local data status", show_header=True)
+    if parse_errors:
+        console.print(
+            f"  [yellow]⚠[/yellow]  Skipped {parse_errors} malformed record(s) during parsing."
+        )
+
+    # --- Compute metrics ---
+    total = len(companies)
+    total_jobs = sum(len(c.jobs) for c in companies)
+    with_jobs = sum(1 for c in companies if c.jobs)
+    with_career_page = sum(1 for c in companies if c.career_page_url)
+    with_email = sum(
+        1 for c in companies if c.generic_emails or c.recruiter_email
+    )
+    with_ai = sum(1 for c in companies if c.ai_summary)
+
+    # ATS platform breakdown (None → "none")
+    platform_counts: dict[str, int] = {}
+    for c in companies:
+        key = c.ats_platform or "none"
+        platform_counts[key] = platform_counts.get(key, 0) + 1
+
+    # --- Main summary table ---
+    table = Table(
+        title="hiring-radar · local data status",
+        show_header=True,
+        header_style="bold magenta",
+    )
     table.add_column("Metric", style="bold cyan", no_wrap=True)
     table.add_column("Count", justify="right", style="bold white")
 
     table.add_row("Total companies", str(total))
-    table.add_row("Companies with ≥1 job listing", str(with_jobs))
+    table.add_row("Total job postings", str(total_jobs))
+    table.add_row("Companies with ≥1 job", str(with_jobs))
+    table.add_row("Companies with career page URL", str(with_career_page))
     table.add_row("Companies with email found", str(with_email))
     table.add_row("Companies with AI summary", str(with_ai))
+    table.add_section()  # visual separator before platform breakdown
+    for platform, count in sorted(platform_counts.items()):
+        table.add_row(f"  platform: {platform}", str(count))
 
     console.print()
     console.print(table)
+
+    # --- Top 5 most recently discovered ---
+    if companies:
+        recent = sorted(companies, key=lambda c: c.discovered_at, reverse=True)[:5]
+        console.print("\n  [bold]5 most recently discovered:[/bold]")
+        for i, c in enumerate(recent, start=1):
+            ts = c.discovered_at.strftime("%Y-%m-%d %H:%M")
+            platform_label = f"[dim]{c.ats_platform or 'feed'}[/dim]"
+            job_count = f"{len(c.jobs)} job(s)"
+            console.print(
+                f"  {i}. [bold white]{c.name}[/bold white]  "
+                f"{platform_label}  [dim]{job_count}[/dim]  [dim italic]{ts}[/dim italic]"
+            )
+
     console.print(f"\n  [dim]Source:[/dim] {companies_file}")
     console.print()
 
