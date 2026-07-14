@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # --- Telegram Notification ---
     telegram_bot_token: str | None = None
 
+    # --- Resume ---
+    resume_path: Path | None = None
+
+
 
 # ===========================================================================
 # Precedence Rule:

@@ -9,3 +9,5 @@ orjson
 tenacity
 python-dotenv
 pyyaml
+pypdf
+
