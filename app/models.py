@@ -72,6 +72,9 @@ class Company(BaseModel):
     ai_talking_points: list[str] = Field(default_factory=list)
     ai_fit_rationale: str | None = None
     research_notes: dict[str, str] = Field(default_factory=dict)
+    company_scores: dict[str, int] = Field(default_factory=dict)
+    company_score_overall: float | None = None
+
 
 
     # --- Timestamps ---

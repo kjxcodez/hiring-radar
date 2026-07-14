@@ -25,6 +25,7 @@ from app.models import Company
 from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
+from app.enrich.company_score import score_company_attractiveness
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
@@ -1252,6 +1253,127 @@ def research_cli(
             console.print(f"[red]Failed to update database {input}: {exc}[/red]")
             raise typer.Exit(code=1) from exc
 
+
+# ---------------------------------------------------------------------------
+# 16. score-company
+# ---------------------------------------------------------------------------
+
+@app.command(name="score-company")
+def score_company_cli(
+    company_name: str = typer.Argument(..., help="Name of the company to evaluate attractiveness for (case-insensitive substring match)."),
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="LLM model override for OpenRouter calls. Default: None.",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--no-dry-run",
+            help="If True, shows prompt preview and exits without calling OpenRouter.",
+        ),
+    ] = False,
+) -> None:
+    """Evaluate a company's desirability and attractiveness across five axes."""
+    # 1. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 2. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+
+    # 3. Perform scoring
+    console.print(f"Evaluating attractiveness for [bold cyan]{co.name}[/bold cyan]...")
+    try:
+        co = score_company_attractiveness(co, model=model, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Attractiveness evaluation failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 4. Display output
+    from rich.table import Table
+    table = Table(title=f"Company Attractiveness Report: {co.name}", show_header=True, header_style="bold magenta")
+    table.add_column("Axis", style="bold cyan", no_wrap=True)
+    table.add_column("Rating (1-10)", justify="right", style="bold white")
+
+    scores = co.company_scores or {}
+    table.add_row("Growth Trajectory", str(scores.get("growth", "—")))
+    table.add_row("Engineering Culture", str(scores.get("engineering_culture", "—")))
+    table.add_row("Remote Friendliness", str(scores.get("remote_friendliness", "—")))
+    table.add_row("Open Source Presence", str(scores.get("open_source_presence", "—")))
+    table.add_row("Hiring Urgency", str(scores.get("hiring_urgency", "—")))
+
+    table.add_section()
+    table.add_row("Overall Desirability Score", f"{co.company_score_overall or '—':.2f}" if co.company_score_overall is not None else "—")
+
+    console.print()
+    console.print(table)
+
+    # Extract rationale from notes
+    rationale = "—"
+    for note in reversed(co.notes):
+        if note.startswith("score_rationale: "):
+            rationale = note[len("score_rationale: "):]
+            break
+
+    console.print(f"[bold]Rationale:[/bold] {rationale}\n")
+
+    # 5. Write back to database if not dry_run
+    if not dry_run:
+        try:
+            input.write_bytes(
+                orjson.dumps(
+                    [c.model_dump(mode="json") for c in all_companies],
+                    option=orjson.OPT_INDENT_2,
+                )
+            )
+            console.print(f"Database successfully updated: [dim]{input}[/dim]\n")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to update database {input}: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
 
 
 # ---------------------------------------------------------------------------
