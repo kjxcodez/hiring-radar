@@ -191,3 +191,62 @@ def safe_get(
             exc=exc,
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# 5. Logging setup
+# ---------------------------------------------------------------------------
+
+def setup_logging() -> None:
+    """Configure loguru sinks for a hiring-radar CLI run.
+
+    Call this **once** at the top of the Typer app callback before any
+    other module emits log records.  It is intentionally *not* called at
+    import time so that tests and library users can control their own
+    logging configuration.
+
+    Sinks configured:
+
+    * **Console** — colourised, concise format, level from
+      ``settings.log_level`` (default ``INFO``).
+    * **File** — ``output/logs/run_<timestamp>.log``, always ``DEBUG``,
+      full format including module and function name.  Each run gets its
+      own timestamped file; no rotation is needed.
+    """
+    import sys
+
+    # Drop the default loguru handler (stderr, DEBUG) to avoid duplicates.
+    logger.remove()
+
+    # --- Console sink ---
+    logger.add(
+        sink=sys.stderr,
+        level=settings.log_level.upper(),
+        colorize=True,
+        format=(
+            "<green>{time:HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            "<level>{message}</level>"
+        ),
+    )
+
+    # --- File sink ---
+    log_path = settings.output_dir / "logs" / "run_{time:YYYY-MM-DD_HHmmss}.log"
+    logger.add(
+        sink=str(log_path),
+        level="DEBUG",
+        colorize=False,
+        format=(
+            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+            "{level: <8} | "
+            "{name}:{function}:{line} | "
+            "{message}"
+        ),
+        encoding="utf-8",
+    )
+
+    logger.debug(
+        "Logging initialised — console level={level}, file={path}",
+        level=settings.log_level.upper(),
+        path=log_path,
+    )
