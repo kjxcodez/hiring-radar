@@ -86,6 +86,79 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </main>
 
+  <!-- Detail Modal Overlay -->
+  <div id="detail-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden transition-all duration-350">
+      <!-- Modal Header -->
+      <div class="border-b border-slate-800 p-6 flex justify-between items-start bg-slate-950/30">
+        <div>
+          <h2 id="modal-company-name" class="text-2xl font-bold text-slate-100"></h2>
+          <div id="modal-company-links" class="flex flex-wrap gap-2 mt-3"></div>
+        </div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-200 transition-colors p-1 rounded-lg hover:bg-slate-800">
+          <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-6">
+        <!-- AI Enrichment Section -->
+        <div>
+          <h3 class="text-lg font-bold text-slate-200 mb-3 flex items-center space-x-2">
+            <span>✨</span> <span>AI Enrichment Notes</span>
+          </h3>
+          <div id="modal-ai-enrichment"></div>
+        </div>
+
+        <!-- Contacts Section -->
+        <div>
+          <h3 class="text-lg font-bold text-slate-200 mb-3 flex items-center space-x-2">
+            <span>📧</span> <span>Outreach Contacts</span>
+          </h3>
+          <div id="modal-contacts"></div>
+        </div>
+
+        <!-- Jobs List Section -->
+        <div>
+          <h3 class="text-lg font-bold text-slate-200 mb-3 flex items-center space-x-2">
+            <span>💼</span> <span>Active Job Openings</span>
+          </h3>
+          <div class="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/20">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-slate-950/60 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    <th class="py-3 px-4">Title</th>
+                    <th class="py-3 px-4">Location</th>
+                    <th class="py-3 px-4 text-center">Remote</th>
+                    <th class="py-3 px-4 text-right">Link</th>
+                  </tr>
+                </thead>
+                <tbody id="modal-jobs-body">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Operational Notes Section -->
+        <div id="modal-notes-section" class="hidden">
+          <h3 class="text-lg font-bold text-slate-200 mb-3 flex items-center space-x-2">
+            <span>📝</span> <span>Scrape & Scrying Notes</span>
+          </h3>
+          <div class="bg-slate-950/40 border border-slate-800 rounded-xl p-4">
+            <ul id="modal-notes-list" class="list-disc list-inside space-y-1.5 text-sm text-slate-300">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Embed data -->
   <script>
     const COMPANIES = __COMPANIES_JSON_PLACEHOLDER__;
@@ -129,9 +202,10 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
         return;
       }
 
-      COMPANIES.forEach(c => {
+      COMPANIES.forEach((c, index) => {
         const row = document.createElement("tr");
-        row.className = "hover:bg-slate-800/30 transition-colors duration-150";
+        row.className = "hover:bg-slate-850 cursor-pointer transition-colors duration-150";
+        row.onclick = () => openModal(index);
 
         // Company info cell
         const nameCell = document.createElement("td");
@@ -146,6 +220,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
           webLink.target = "_blank";
           webLink.className = "text-xs text-cyan-400 hover:underline block mt-0.5";
           webLink.textContent = c.website;
+          webLink.onclick = (e) => e.stopPropagation();
           nameCell.appendChild(webLink);
         }
         row.appendChild(nameCell);
@@ -214,10 +289,190 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
         tbody.appendChild(row);
       });
     });
+
+    function openModal(companyIndex) {
+      const c = COMPANIES[companyIndex];
+      if (!c) return;
+
+      // Set Title
+      document.getElementById("modal-company-name").textContent = c.name;
+      
+      // Set Website Link
+      const webContainer = document.getElementById("modal-company-links");
+      webContainer.innerHTML = "";
+      
+      const linkFields = [
+        { label: "Website", url: c.website, icon: "🌐" },
+        { label: "Careers Page", url: c.career_page_url, icon: "📄" },
+        { label: "LinkedIn", url: c.linkedin_url, icon: "🔗" },
+        { label: "GitHub", url: c.github_url, icon: "💻" }
+      ];
+
+      linkFields.forEach(f => {
+        if (f.url) {
+          const a = document.createElement("a");
+          a.href = f.url;
+          a.target = "_blank";
+          a.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition-colors flex items-center space-x-1";
+          a.innerHTML = `<span>${f.icon}</span> <span>${f.label}</span>`;
+          webContainer.appendChild(a);
+        }
+      });
+
+      // Populate AI Enrichment
+      const aiContainer = document.getElementById("modal-ai-enrichment");
+      if (c.ai_summary || (c.ai_talking_points && c.ai_talking_points.length > 0) || c.ai_fit_rationale) {
+        let talkingPointsHtml = "";
+        if (c.ai_talking_points && c.ai_talking_points.length > 0) {
+          talkingPointsHtml = `
+            <div class="mt-3">
+              <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Outreach Hooks / Talking Points</div>
+              <ul class="list-disc list-inside space-y-1 text-sm text-slate-300 pl-2">
+                ${c.ai_talking_points.map(pt => `<li>${pt}</li>`).join("")}
+              </ul>
+            </div>
+          `;
+        }
+
+        aiContainer.innerHTML = `
+          <div class="bg-slate-950/40 border border-slate-800 rounded-xl p-5 space-y-4">
+            <div>
+              <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">AI Summary</div>
+              <p class="text-sm text-slate-200">${c.ai_summary || "—"}</p>
+            </div>
+            <div>
+              <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Outreach Fit Rationale</div>
+              <p class="text-sm text-slate-200">${c.ai_fit_rationale || "—"}</p>
+            </div>
+            ${talkingPointsHtml}
+          </div>
+        `;
+      } else {
+        aiContainer.innerHTML = `
+          <div class="bg-slate-950/20 border border-dashed border-slate-800 rounded-xl p-6 text-center text-slate-400 text-sm">
+            ✨ Not yet enriched — run <code class="bg-slate-950 px-1.5 py-0.5 rounded text-xs text-indigo-400">jobs enrich</code> to populate AI summaries and hooks.
+          </div>
+        `;
+      }
+
+      // Populate Contacts
+      const contactsContainer = document.getElementById("modal-contacts");
+      const recruiterName = c.recruiter_name || "—";
+      const recruiterEmail = c.recruiter_email ? `<a href="mailto:${c.recruiter_email}" class="text-cyan-400 hover:underline">${c.recruiter_email}</a>` : "—";
+      
+      let genericEmailsHtml = "—";
+      if (c.generic_emails && c.generic_emails.length > 0) {
+        genericEmailsHtml = c.generic_emails.map(email => `<a href="mailto:${email}" class="text-cyan-400 hover:underline block">${email}</a>`).join("");
+      }
+
+      contactsContainer.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="bg-slate-950/40 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Recruiter / Contact Person</div>
+            <div class="space-y-1.5 text-sm">
+              <div><span class="text-slate-400">Name:</span> <span class="text-slate-200">${recruiterName}</span></div>
+              <div><span class="text-slate-400">Email:</span> <span class="text-slate-200">${recruiterEmail}</span></div>
+            </div>
+          </div>
+          <div class="bg-slate-950/40 border border-slate-800 rounded-xl p-4">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Generic Company Emails</div>
+            <div class="space-y-1.5 text-sm text-slate-200">
+              ${genericEmailsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Populate Jobs List
+      const jobsContainer = document.getElementById("modal-jobs-body");
+      jobsContainer.innerHTML = "";
+      if (c.jobs && c.jobs.length > 0) {
+        c.jobs.forEach(j => {
+          const row = document.createElement("tr");
+          row.className = "border-b border-slate-800/50 hover:bg-slate-800/20";
+          
+          const titleCell = document.createElement("td");
+          titleCell.className = "py-3 px-4 text-sm font-semibold text-slate-200";
+          titleCell.textContent = j.job_title;
+          row.appendChild(titleCell);
+
+          const locCell = document.createElement("td");
+          locCell.className = "py-3 px-4 text-sm text-slate-300";
+          locCell.textContent = j.location || "—";
+          row.appendChild(locCell);
+
+          const typeCell = document.createElement("td");
+          typeCell.className = "py-3 px-4 text-center";
+          const typeSpan = document.createElement("span");
+          typeSpan.className = `px-2 py-0.5 rounded-full text-xs font-semibold ${
+            j.remote_type === 'remote' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+            j.remote_type === 'hybrid' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+            'bg-slate-800 text-slate-400 border border-slate-700'
+          }`;
+          typeSpan.textContent = j.remote_type || "unknown";
+          typeCell.appendChild(typeSpan);
+          row.appendChild(typeCell);
+
+          const actionCell = document.createElement("td");
+          actionCell.className = "py-3 px-4 text-right";
+          const a = document.createElement("a");
+          a.href = j.job_url;
+          a.target = "_blank";
+          a.className = "text-xs text-cyan-400 hover:underline";
+          a.textContent = "View Post ↗";
+          actionCell.appendChild(a);
+          row.appendChild(actionCell);
+
+          jobsContainer.appendChild(row);
+        });
+      } else {
+        jobsContainer.innerHTML = `
+          <tr>
+            <td colspan="4" class="py-6 text-center text-slate-500 italic text-sm">No job postings available.</td>
+          </tr>
+        `;
+      }
+
+      // Populate Notes
+      const notesContainer = document.getElementById("modal-notes-section");
+      if (c.notes && c.notes.length > 0) {
+        notesContainer.classList.remove("hidden");
+        const list = document.getElementById("modal-notes-list");
+        list.innerHTML = c.notes.map(n => `<li class="text-slate-350">${n}</li>`).join("");
+      } else {
+        notesContainer.classList.add("hidden");
+      }
+
+      // Show Modal
+      const modal = document.getElementById("detail-modal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeModal() {
+      const modal = document.getElementById("detail-modal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+
+    // Close on click outside card
+    document.getElementById("detail-modal").addEventListener("click", (e) => {
+      if (e.target === document.getElementById("detail-modal")) {
+        closeModal();
+      }
+    });
+
+    // Close on escape key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeModal();
+      }
+    });
   </script>
 </body>
 </html>
 """
+
 
 
 def build_dashboard(input_path: Path, output_path: Path) -> None:
