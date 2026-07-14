@@ -64,6 +64,47 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Filter Bar -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-6 shadow-md">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+        <!-- Search Input -->
+        <div class="lg:col-span-2">
+          <label for="search-input" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Search Companies</label>
+          <input type="text" id="search-input" placeholder="Type company name..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors">
+        </div>
+        <!-- Source/Platform Dropdown -->
+        <div>
+          <label for="source-select" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Source / ATS</label>
+          <select id="source-select" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors">
+            <option value="all">All Sources</option>
+          </select>
+        </div>
+        <!-- Checkboxes -->
+        <div class="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <!-- Remote Only -->
+          <label class="flex items-center space-x-2 text-sm text-slate-300 cursor-pointer select-none py-2">
+            <input type="checkbox" id="remote-check" class="rounded border-slate-850 bg-slate-950 text-cyan-500 focus:ring-0">
+            <span>Remote Only</span>
+          </label>
+          <!-- Has Email -->
+          <label class="flex items-center space-x-2 text-sm text-slate-300 cursor-pointer select-none py-2">
+            <input type="checkbox" id="email-check" class="rounded border-slate-850 bg-slate-950 text-cyan-500 focus:ring-0">
+            <span>Has Email</span>
+          </label>
+          <!-- Has AI Summary -->
+          <label class="flex items-center space-x-2 text-sm text-slate-300 cursor-pointer select-none py-2">
+            <input type="checkbox" id="ai-check" class="rounded border-slate-850 bg-slate-950 text-cyan-500 focus:ring-0">
+            <span>Has AI Summary</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results Counter -->
+    <div class="text-sm text-slate-400 mb-4" id="results-counter">
+      Showing <span class="text-slate-200 font-semibold" id="count-visible">0</span> of <span class="text-slate-200 font-semibold" id="count-total">0</span> companies
+    </div>
+
     <!-- Table Container -->
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
       <div class="overflow-x-auto">
@@ -85,6 +126,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
   </main>
+
 
   <!-- Detail Modal Overlay -->
   <div id="detail-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur flex items-center justify-center p-4 z-50">
@@ -189,105 +231,189 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById("stat-total-jobs").textContent = totalJobs;
       document.getElementById("stat-enriched-ai").textContent = `${enrichedCount} / ${totalCompanies}`;
 
-      // 2. Populate table
+      // 2. Populate Source select dropdown options dynamically
+      const sourceSelect = document.getElementById("source-select");
+      const sourcesSet = new Set();
+      COMPANIES.forEach(c => {
+        const src = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
+        if (src) sourcesSet.add(src);
+      });
+      sourcesSet.forEach(src => {
+        const opt = document.createElement("option");
+        opt.value = src;
+        opt.textContent = src;
+        sourceSelect.appendChild(opt);
+      });
+
       const tbody = document.getElementById("companies-table-body");
-      if (COMPANIES.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="6" class="py-12 text-center text-slate-400 italic">
-              No companies discovered yet. Run discovery and scraper first.
-            </td>
-          </tr>
-        `;
-        return;
+      const searchInput = document.getElementById("search-input");
+      const remoteCheck = document.getElementById("remote-check");
+      const emailCheck = document.getElementById("email-check");
+      const aiCheck = document.getElementById("ai-check");
+
+      // Bind event listeners
+      searchInput.addEventListener("input", applyFilters);
+      sourceSelect.addEventListener("change", applyFilters);
+      remoteCheck.addEventListener("change", applyFilters);
+      emailCheck.addEventListener("change", applyFilters);
+      aiCheck.addEventListener("change", applyFilters);
+
+      function renderTable(visibleCompanies) {
+        tbody.innerHTML = "";
+        
+        if (visibleCompanies.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="6" class="py-12 text-center text-slate-400 italic">
+                No companies match the current filter criteria.
+              </td>
+            </tr>
+          `;
+          return;
+        }
+
+        visibleCompanies.forEach((c) => {
+          // Find original index to pass to openModal
+          const originalIndex = COMPANIES.findIndex(comp => comp.name === c.name && comp.domain === c.domain);
+          
+          const row = document.createElement("tr");
+          row.className = "hover:bg-slate-850 cursor-pointer transition-colors duration-150";
+          row.onclick = () => openModal(originalIndex);
+
+          // Company info cell
+          const nameCell = document.createElement("td");
+          nameCell.className = "py-4 px-6";
+          const nameDiv = document.createElement("div");
+          nameDiv.className = "font-semibold text-slate-100";
+          nameDiv.textContent = c.name;
+          nameCell.appendChild(nameDiv);
+          if (c.website) {
+            const webLink = document.createElement("a");
+            webLink.href = c.website;
+            webLink.target = "_blank";
+            webLink.className = "text-xs text-cyan-400 hover:underline block mt-0.5";
+            webLink.textContent = c.website;
+            webLink.onclick = (e) => e.stopPropagation();
+            nameCell.appendChild(webLink);
+          }
+          row.appendChild(nameCell);
+
+          // Platform / Source cell
+          const sourceCell = document.createElement("td");
+          sourceCell.className = "py-4 px-6 text-sm text-slate-300";
+          const sourceSpan = document.createElement("span");
+          sourceSpan.className = "px-2.5 py-1 rounded-full text-xs font-medium bg-slate-950 border border-slate-800 text-slate-300";
+          sourceSpan.textContent = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
+          sourceCell.appendChild(sourceSpan);
+          row.appendChild(sourceCell);
+
+          // Jobs count cell
+          const jobsCell = document.createElement("td");
+          jobsCell.className = "py-4 px-6 text-center text-sm font-semibold text-slate-100";
+          jobsCell.textContent = c.jobs ? c.jobs.length : 0;
+          row.appendChild(jobsCell);
+
+          // Email status cell
+          const emailCell = document.createElement("td");
+          emailCell.className = "py-4 px-6 text-center";
+          const hasEmail = c.recruiter_email || (c.generic_emails && c.generic_emails.length > 0);
+          const emailBadge = document.createElement("span");
+          if (hasEmail) {
+            emailBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            emailBadge.textContent = "Found";
+            emailBadge.title = c.recruiter_email || c.generic_emails[0];
+          } else {
+            emailBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20";
+            emailBadge.textContent = "None";
+          }
+          emailCell.appendChild(emailBadge);
+          row.appendChild(emailCell);
+
+          // AI summary cell
+          const aiCell = document.createElement("td");
+          aiCell.className = "py-4 px-6 text-center";
+          const aiBadge = document.createElement("span");
+          if (c.ai_summary) {
+            aiBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20";
+            aiBadge.textContent = "Set";
+            aiBadge.title = c.ai_summary;
+          } else {
+            aiBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-500 border border-slate-700";
+            aiBadge.textContent = "Missing";
+          }
+          aiCell.appendChild(aiBadge);
+          row.appendChild(aiCell);
+
+          // Last updated cell
+          const updatedCell = document.createElement("td");
+          updatedCell.className = "py-4 px-6 text-sm text-slate-400";
+          if (c.last_updated) {
+            try {
+              const date = new Date(c.last_updated);
+              updatedCell.textContent = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } catch(e) {
+              updatedCell.textContent = c.last_updated;
+            }
+          } else {
+            updatedCell.textContent = "N/A";
+          }
+          row.appendChild(updatedCell);
+
+          tbody.appendChild(row);
+        });
       }
 
-      COMPANIES.forEach((c, index) => {
-        const row = document.createElement("tr");
-        row.className = "hover:bg-slate-850 cursor-pointer transition-colors duration-150";
-        row.onclick = () => openModal(index);
+      function applyFilters() {
+        const query = searchInput.value.toLowerCase().trim();
+        const selectedSource = sourceSelect.value;
+        const remoteOnly = remoteCheck.checked;
+        const hasEmailOnly = emailCheck.checked;
+        const hasAiOnly = aiCheck.checked;
 
-        // Company info cell
-        const nameCell = document.createElement("td");
-        nameCell.className = "py-4 px-6";
-        const nameDiv = document.createElement("div");
-        nameDiv.className = "font-semibold text-slate-100";
-        nameDiv.textContent = c.name;
-        nameCell.appendChild(nameDiv);
-        if (c.website) {
-          const webLink = document.createElement("a");
-          webLink.href = c.website;
-          webLink.target = "_blank";
-          webLink.className = "text-xs text-cyan-400 hover:underline block mt-0.5";
-          webLink.textContent = c.website;
-          webLink.onclick = (e) => e.stopPropagation();
-          nameCell.appendChild(webLink);
-        }
-        row.appendChild(nameCell);
-
-        // Platform / Source cell
-        const sourceCell = document.createElement("td");
-        sourceCell.className = "py-4 px-6 text-sm text-slate-300";
-        const sourceSpan = document.createElement("span");
-        sourceSpan.className = "px-2.5 py-1 rounded-full text-xs font-medium bg-slate-950 border border-slate-800 text-slate-300";
-        sourceSpan.textContent = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
-        sourceCell.appendChild(sourceSpan);
-        row.appendChild(sourceCell);
-
-        // Jobs count cell
-        const jobsCell = document.createElement("td");
-        jobsCell.className = "py-4 px-6 text-center text-sm font-semibold text-slate-100";
-        jobsCell.textContent = c.jobs ? c.jobs.length : 0;
-        row.appendChild(jobsCell);
-
-        // Email status cell
-        const emailCell = document.createElement("td");
-        emailCell.className = "py-4 px-6 text-center";
-        const hasEmail = c.recruiter_email || (c.generic_emails && c.generic_emails.length > 0);
-        const emailBadge = document.createElement("span");
-        if (hasEmail) {
-          emailBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-          emailBadge.textContent = "Found";
-          emailBadge.title = c.recruiter_email || c.generic_emails[0];
-        } else {
-          emailBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20";
-          emailBadge.textContent = "None";
-        }
-        emailCell.appendChild(emailBadge);
-        row.appendChild(emailCell);
-
-        // AI summary cell
-        const aiCell = document.createElement("td");
-        aiCell.className = "py-4 px-6 text-center";
-        const aiBadge = document.createElement("span");
-        if (c.ai_summary) {
-          aiBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20";
-          aiBadge.textContent = "Set";
-          aiBadge.title = c.ai_summary;
-        } else {
-          aiBadge.className = "px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-500 border border-slate-700";
-          aiBadge.textContent = "Missing";
-        }
-        aiCell.appendChild(aiBadge);
-        row.appendChild(aiCell);
-
-        // Last updated cell
-        const updatedCell = document.createElement("td");
-        updatedCell.className = "py-4 px-6 text-sm text-slate-400";
-        if (c.last_updated) {
-          try {
-            const date = new Date(c.last_updated);
-            updatedCell.textContent = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-          } catch(e) {
-            updatedCell.textContent = c.last_updated;
+        const filtered = COMPANIES.filter(c => {
+          // 1. Text search
+          if (query && !c.name.toLowerCase().includes(query)) {
+            return false;
           }
-        } else {
-          updatedCell.textContent = "N/A";
-        }
-        row.appendChild(updatedCell);
 
-        tbody.appendChild(row);
-      });
+          // 2. Source dropdown
+          if (selectedSource !== "all") {
+            const src = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
+            if (src !== selectedSource) return false;
+          }
+
+          // 3. Remote check
+          if (remoteOnly) {
+            const hasRemoteJob = c.jobs && c.jobs.some(j => j.remote_type === "remote");
+            if (!hasRemoteJob) return false;
+          }
+
+          // 4. Has email check
+          if (hasEmailOnly) {
+            const hasEmail = c.recruiter_email || (c.generic_emails && c.generic_emails.length > 0);
+            if (!hasEmail) return false;
+          }
+
+          // 5. Has AI check
+          // Note: "Has AI summary" doubles as a rough proxy for "enriched" vs "not yet enriched".
+          // This should later be replaced/supplemented once company scoring lands in Phase 10.
+          if (hasAiOnly && !c.ai_summary) {
+            return false;
+          }
+
+          return true;
+        });
+
+        // Update counter
+        document.getElementById("count-visible").textContent = filtered.length;
+        document.getElementById("count-total").textContent = COMPANIES.length;
+
+        // Render
+        renderTable(filtered);
+      }
+
+      // Initial run
+      applyFilters();
     });
 
     function openModal(companyIndex) {
