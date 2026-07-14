@@ -17,10 +17,11 @@ from typing import Callable
 from app.models import Company
 
 # Lazy imports keep startup time fast; the functions are referenced, not called.
-from app.discover import ashby, greenhouse, lever, remoteok, workable, wwr
+from app.discover import ashby, bamboohr, greenhouse, lever, remoteok, workable, wwr
 
 SOURCE_REGISTRY: dict[str, Callable[[list[str]], list[Company]]] = {
     "ashby": ashby.discover,
+    "bamboohr": bamboohr.discover,
     "greenhouse": greenhouse.discover,
     "lever": lever.discover,
     # NOTE: remoteok.discover has a different signature — it takes `limit: int`
