@@ -1,0 +1,9 @@
+default_profile: frontend
+telegram:
+  enabled: false
+  chat_id: ""
+email:
+  from_name: "Kapil Kumar Jangid"
+  from_address: ""
+export:
+  default_format: csv

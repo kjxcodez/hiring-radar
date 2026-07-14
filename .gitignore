@@ -12,6 +12,7 @@ env/
 
 # Environment secrets
 .env
+config.yaml
 
 # Tool output
 output/*.json
