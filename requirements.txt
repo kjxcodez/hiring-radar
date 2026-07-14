@@ -8,3 +8,4 @@ loguru
 orjson
 tenacity
 python-dotenv
+pyyaml

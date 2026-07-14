@@ -1,0 +1,5 @@
+name: frontend
+keywords: [react, next.js, typescript]
+remote: true
+countries: [usa, canada]
+exclude: [internship, intern, unpaid]

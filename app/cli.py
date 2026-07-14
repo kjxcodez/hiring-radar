@@ -26,6 +26,7 @@ from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
+from app.profiles import load_profile
 from app.utils import RateLimiter, get_http_client, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -73,8 +74,30 @@ def discover(
         int,
         typer.Option("--limit", help="Maximum number of companies to collect."),
     ] = 100,
+    profile: Annotated[
+        Optional[str],
+        typer.Option(
+            "--profile",
+            help="Name of search profile to use for filtering (e.g. frontend).",
+        ),
+    ] = None,
 ) -> None:
     """Collect hiring companies from public ATS APIs and job boards."""
+    # --- Load Search Profile if provided ---
+    if profile:
+        try:
+            loaded_prof = load_profile(profile)
+            console.print()
+            console.print(f"[bold green]✓ Loaded search profile: [cyan]{profile}[/cyan][/bold green]")
+            console.print(f"  [dim]Keywords:[/dim]  {loaded_prof.keywords}")
+            console.print(f"  [dim]Remote:[/dim]    {loaded_prof.remote}")
+            console.print(f"  [dim]Countries:[/dim] {loaded_prof.countries}")
+            console.print(f"  [dim]Exclude:[/dim]   {loaded_prof.exclude}")
+            console.print()
+        except Exception as exc:
+            console.print(f"[red]Error loading profile '{profile}':[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
     source_list = [s.strip() for s in sources.split(",") if s.strip()]
 
     # --- Validate sources ---
