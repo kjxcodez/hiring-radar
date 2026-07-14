@@ -27,6 +27,7 @@ from app.enrich import enrich as _enrich_ai
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
+from app.filters import apply_filters
 from app.utils import RateLimiter, get_http_client, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,42 @@ def discover(
         typer.Option(
             "--profile",
             help="Name of search profile to use for filtering (e.g. 'frontend'). Default: None.",
+        ),
+    ] = None,
+    remote: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--remote/--no-remote",
+            help="Filter remote jobs only (True), non-remote jobs only (False), or all (None). Default: None.",
+            show_default=False,
+        ),
+    ] = None,
+    country: Annotated[
+        Optional[str],
+        typer.Option(
+            "--country",
+            help="Filter jobs by location substring. Default: None.",
+        ),
+    ] = None,
+    keyword: Annotated[
+        Optional[str],
+        typer.Option(
+            "--keyword",
+            help="Filter jobs by title substring. Default: None.",
+        ),
+    ] = None,
+    exclude: Annotated[
+        Optional[str],
+        typer.Option(
+            "--exclude",
+            help="Filter out jobs matching this title substring. Default: None.",
+        ),
+    ] = None,
+    days: Annotated[
+        Optional[int],
+        typer.Option(
+            "--days",
+            help="Filter jobs posted within this many days. Default: None.",
         ),
     ] = None,
 ) -> None:
@@ -183,7 +220,18 @@ def discover(
         else:
             merged[key] = new_co
 
-    final: list[Company] = list(merged.values())[:limit]
+    # --- Apply Filters ---
+    before_filter_count = len(merged)
+    filtered = apply_filters(
+        list(merged.values()),
+        profile=loaded_prof if profile else None,
+        remote=remote,
+        country=country,
+        keyword=keyword,
+        exclude=exclude,
+        days=days,
+    )
+    final: list[Company] = filtered[:limit]
 
     # --- Write output ---
     total_jobs = sum(len(c.jobs) for c in final)
@@ -205,6 +253,7 @@ def discover(
     table.add_column("Value", justify="right", style="bold white")
     table.add_row("Sources queried", str(len(source_list)))
     table.add_row("New companies found", str(len(all_new)))
+    table.add_row("Companies before filters", str(before_filter_count))
     table.add_row("Total companies written", str(len(final)))
     table.add_row("Total job listings", str(total_jobs))
     console.print(table)
