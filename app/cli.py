@@ -1740,13 +1740,13 @@ def view_dashboard(
     """Generate a self-contained static HTML dashboard for local data review."""
     import webbrowser
 
-    console.print(f"Generating static dashboard from [bold cyan]{input}[/bold cyan]…")
+    console.print(f"Generating static dashboard from [bold cyan]{input}[/bold cyan]...")
     try:
         build_dashboard(input_path=input, output_path=output)
-        console.print(f"[bold green]✓ Dashboard generated successfully![/bold green] Saved to: [dim]{output}[/dim]")
+        console.print(f"[bold green][OK] Dashboard generated successfully![/bold green] Saved to: [dim]{output}[/dim]")
 
         if open_browser:
-            console.print("Opening dashboard in your default browser…")
+            console.print("Opening dashboard in your default browser...")
             webbrowser.open(output.absolute().as_uri())
     except Exception as exc:
         console.print(f"[bold red]Error generating dashboard:[/bold red] {exc}")
