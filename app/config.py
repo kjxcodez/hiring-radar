@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: str = "INFO"
 
+    # --- SMTP / Outreach ---
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_app_password: str | None = None
+
 
 # ===========================================================================
 # Precedence Rule:

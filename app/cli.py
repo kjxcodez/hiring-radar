@@ -28,7 +28,7 @@ from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
-from app.outreach import generate_email
+from app.outreach import generate_email, send_test_email
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
@@ -1132,6 +1132,32 @@ def preview(
     console.print()
     console.print(panel)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 9. test-smtp
+# ---------------------------------------------------------------------------
+
+@app.command(name="test-smtp")
+def test_smtp(
+    email: str = typer.Argument(..., help="Recipient email address to send the test message to."),
+) -> None:
+    """Send a test email to verify SMTP and App Password settings."""
+    console.print(f"Sending SMTP connection test email to [bold cyan]{email}[/bold cyan]…")
+    try:
+        success = send_test_email(email)
+        if success:
+            console.print("[bold green]✓ Test email sent successfully![/bold green] Please check your inbox.")
+        else:
+            console.print("[bold red]✗ Failed to send test email.[/bold red] Review the error details in the logs.")
+            raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[bold red]Error configuring SMTP connection:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+
 
 
 
