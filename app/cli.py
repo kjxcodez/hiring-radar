@@ -29,7 +29,7 @@ from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
 from app.outreach import generate_email, send_test_email, send_email
-from app.notify import send_telegram_message
+from app.notify import send_telegram_message, format_new_company_alert
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
@@ -1390,12 +1390,155 @@ def test_telegram() -> None:
 
 
 # ---------------------------------------------------------------------------
-
-
+# 12. watch
 # ---------------------------------------------------------------------------
 
+@app.command(name="watch")
+def watch_loop(
+    interval: Annotated[
+        int,
+        typer.Option(
+            "--interval",
+            help="Polling interval in minutes. Default: 30.",
+        ),
+    ] = 30,
+    sources: Annotated[
+        str,
+        typer.Option(
+            "--sources",
+            help="Comma-separated list of ATS platforms / feeds to query. Default: 'greenhouse,lever,remoteok,wwr'.",
+        ),
+    ] = "greenhouse,lever,remoteok,wwr",
+    profile: Annotated[
+        Optional[str],
+        typer.Option(
+            "--profile",
+            help="Name of search profile to use for filtering (e.g. 'frontend'). Default: None.",
+        ),
+    ] = None,
+    once: Annotated[
+        bool,
+        typer.Option(
+            "--once/--loop",
+            help="Run a single discovery pass and exit immediately. Default: False.",
+        ),
+    ] = False,
+) -> None:
+    """Watch sources continuously, notifying Telegram of new companies or job postings."""
+    import time
+    from datetime import datetime
 
+    companies_file = settings.output_dir / "companies.json"
 
+    def get_current_state() -> dict[str, Company]:
+        if not companies_file.exists():
+            return {}
+        try:
+            raw = orjson.loads(companies_file.read_bytes())
+            return {c.dedupe_key(): c for c in [Company.model_validate(x) for x in raw]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("watch: failed to load existing database ({exc})", exc=exc)
+            return {}
+
+    console.print()
+    if once:
+        console.print("[bold cyan]Watch mode: running a single check...[/bold cyan]")
+    else:
+        console.print(f"[bold cyan]Watch mode: starting polling loop (interval: {interval}m, sources: {sources})...[/bold cyan]")
+        console.print("[dim]Press Ctrl+C to terminate watch loop cleanly.[/dim]\n")
+
+    try:
+        while True:
+            cycle_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            console.print(f"[{cycle_time}] Checking for new hiring activities…")
+
+            # a. Load previous state
+            previous_state = get_current_state()
+
+            # b. Run discovery
+            try:
+                _run_discovery(
+                    sources=sources,
+                    seed_file=None,
+                    limit=100,
+                    profile=profile,
+                    remote=None,
+                    country=None,
+                    keyword=None,
+                    exclude=None,
+                    days=None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]⚠ Discovery failed this cycle: {exc}[/red]")
+
+            # c. Reload new state
+            new_state = get_current_state()
+
+            # d. Diff and Send Alerts
+            new_companies_alerted = 0
+            new_jobs_alerted = 0
+
+            for key, new_co in new_state.items():
+                if key not in previous_state:
+                    # Brand new company
+                    alert_msg = format_new_company_alert(new_co)
+                    console.print(f"  [green]+[/green] New company: [bold]{new_co.name}[/bold]. Sending Telegram alert…")
+                    send_telegram_message(alert_msg)
+                    new_companies_alerted += 1
+                    time.sleep(1)  # brief sleep to avoid burst rate-limits
+                else:
+                    # Existing company, diff jobs list
+                    prev_co = previous_state[key]
+                    prev_urls = {j.job_url for j in prev_co.jobs}
+                    new_jobs = [j for j in new_co.jobs if j.job_url not in prev_urls]
+                    if new_jobs:
+                        first_new_job = new_jobs[0]
+                        count_new = len(new_jobs)
+                        
+                        # Short alert message
+                        msg = (
+                            f"🔔 *New Job Openings at {new_co.name}*\n\n"
+                            f"💼 Added {count_new} new role(s), including:\n"
+                            f"👉 [{first_new_job.job_title}]({first_new_job.job_url})\n\n"
+                            f"#hiring #{new_co.ats_platform or 'feed'}"
+                        )
+                        console.print(f"  [cyan]*[/cyan] {new_co.name}: {count_new} new job(s) found. Sending Telegram alert…")
+                        send_telegram_message(msg)
+                        new_jobs_alerted += 1
+                        time.sleep(1)  # brief sleep to avoid burst rate-limits
+
+            # e. Cycle logging
+            logger.info(
+                "watch cycle finished: previous={prev_len}, current={current_len}, "
+                "new_companies={new_cos}, new_jobs={new_jbs}",
+                prev_len=len(previous_state),
+                current_len=len(new_state),
+                new_cos=new_companies_alerted,
+                new_jbs=new_jobs_alerted,
+            )
+            console.print(f"Cycle finished. Alerts sent: {new_companies_alerted} new companies, {new_jobs_alerted} new jobs.\n")
+
+            if once:
+                break
+
+            console.print(f"Sleeping for {interval} minutes (next check around {datetime.now() + timedelta(minutes=interval)})…\n")
+            time.sleep(interval * 60)
+
+    except KeyboardInterrupt:
+        console.print()
+        console.print("[bold yellow]Watch loop interrupted by user. Exiting cleanly…[/bold yellow]")
+        
+        # f. Clean termination summary
+        table = Table(title="watch — loop termination summary", show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="bold cyan", no_wrap=True)
+        table.add_column("Value", justify="right", style="bold white")
+        table.add_row("Status", "Terminated")
+        table.add_row("Polling Interval (minutes)", str(interval))
+        table.add_row("Sources", sources)
+        table.add_row("Profile", profile or "None")
+        console.print(table)
+        console.print()
+        raise typer.Exit(code=0)
 
 
 # ---------------------------------------------------------------------------
