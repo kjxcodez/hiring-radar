@@ -28,6 +28,7 @@ from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
+from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -120,7 +121,32 @@ def discover(
     ] = None,
 ) -> None:
     """Collect hiring companies from public ATS APIs and job boards."""
+    _run_discovery(
+        sources=sources,
+        seed_file=seed_file,
+        limit=limit,
+        profile=profile,
+        remote=remote,
+        country=country,
+        keyword=keyword,
+        exclude=exclude,
+        days=days,
+    )
+
+
+def _run_discovery(
+    sources: str,
+    seed_file: Optional[Path],
+    limit: int,
+    profile: Optional[str],
+    remote: Optional[bool],
+    country: Optional[str],
+    keyword: Optional[str],
+    exclude: Optional[str],
+    days: Optional[int],
+) -> None:
     # --- Load Search Profile if provided ---
+    loaded_prof = None
     if profile:
         try:
             loaded_prof = load_profile(profile)
@@ -224,7 +250,7 @@ def discover(
     before_filter_count = len(merged)
     filtered = apply_filters(
         list(merged.values()),
-        profile=loaded_prof if profile else None,
+        profile=loaded_prof if loaded_prof else None,
         remote=remote,
         country=country,
         keyword=keyword,
@@ -824,6 +850,179 @@ def examples() -> None:
     )
     console.print()
     console.print(panel)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# 7. search subcommands
+# ---------------------------------------------------------------------------
+
+search_app = typer.Typer(
+    help="Manage and run saved search configurations."
+)
+app.add_typer(search_app, name="search")
+
+
+@search_app.command(name="save")
+def search_save(
+    name: str,
+    sources: Annotated[
+        str,
+        typer.Option(
+            "--sources",
+            help="Comma-separated list of ATS platforms / feeds to query. Default: 'greenhouse,lever,remoteok,wwr'.",
+        ),
+    ] = "greenhouse,lever,remoteok,wwr",
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Maximum number of companies to collect and output. Default: 100."),
+    ] = 100,
+    profile: Annotated[
+        Optional[str],
+        typer.Option(
+            "--profile",
+            help="Name of search profile to use for filtering (e.g. 'frontend'). Default: None.",
+        ),
+    ] = None,
+    remote: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--remote/--no-remote",
+            help="Filter remote jobs only (True), non-remote jobs only (False), or all (None). Default: None.",
+            show_default=False,
+        ),
+    ] = None,
+    country: Annotated[
+        Optional[str],
+        typer.Option(
+            "--country",
+            help="Filter jobs by location substring. Default: None.",
+        ),
+    ] = None,
+    keyword: Annotated[
+        Optional[str],
+        typer.Option(
+            "--keyword",
+            help="Filter jobs by title substring. Default: None.",
+        ),
+    ] = None,
+    exclude: Annotated[
+        Optional[str],
+        typer.Option(
+            "--exclude",
+            help="Filter out jobs matching this title substring. Default: None.",
+        ),
+    ] = None,
+    days: Annotated[
+        Optional[int],
+        typer.Option(
+            "--days",
+            help="Filter jobs posted within this many days. Default: None.",
+        ),
+    ] = None,
+) -> None:
+    """Save a named combination of search query parameters."""
+    source_list = [s.strip() for s in sources.split(",") if s.strip()]
+    unknown = [s for s in source_list if s not in SOURCE_REGISTRY]
+    if unknown:
+        console.print(
+            f"[red]Error: Unknown source(s): {', '.join(unknown)}[/red]\n"
+            "What to do next: Use only valid sources: greenhouse, lever, remoteok, wwr, ashby, workable, bamboohr."
+        )
+        raise typer.Exit(code=1)
+
+    searches = load_saved_searches()
+    if name in searches:
+        confirm = typer.confirm(f"Saved search '{name}' already exists. Overwrite?")
+        if not confirm:
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit(code=0)
+
+    s = SavedSearch(
+        name=name,
+        profile=profile,
+        sources=source_list,
+        remote=remote,
+        country=country,
+        keyword=keyword,
+        exclude=exclude,
+        days=days,
+        limit=limit,
+    )
+    searches[name] = s
+    save_saved_searches(searches)
+    console.print(f"[bold green]✓ Saved search '{name}' successfully![/bold green]")
+
+
+@search_app.command(name="run")
+def search_run(name: str) -> None:
+    """Run a saved search configuration by name."""
+    searches = load_saved_searches()
+    if name not in searches:
+        console.print(
+            f"[red]Error: Saved search '{name}' not found.[/red]\n"
+            f"What to do next: Use 'hiring-radar search list' to view available saved searches."
+        )
+        raise typer.Exit(code=1)
+
+    s = searches[name]
+    console.print(f"[bold green]Running saved search: {name}[/bold green]")
+
+    _run_discovery(
+        sources=",".join(s.sources),
+        seed_file=None,
+        limit=s.limit,
+        profile=s.profile,
+        remote=s.remote,
+        country=s.country,
+        keyword=s.keyword,
+        exclude=s.exclude,
+        days=s.days,
+    )
+
+
+@search_app.command(name="list")
+def search_list() -> None:
+    """List all currently saved search configurations."""
+    searches = load_saved_searches()
+    if not searches:
+        console.print()
+        console.print("[yellow]No saved searches found.[/yellow]")
+        console.print("  Run [bold]hiring-radar search save <name>[/bold] to create one.")
+        console.print()
+        raise typer.Exit(code=0)
+
+    table = Table(title="hiring-radar · saved searches", show_header=True, header_style="bold magenta")
+    table.add_column("Name", style="bold cyan", no_wrap=True)
+    table.add_column("Sources", style="bold white")
+    table.add_column("Profile", style="bold white")
+    table.add_column("Filters", style="bold white")
+    table.add_column("Limit", justify="right", style="bold white")
+
+    for name, s in sorted(searches.items()):
+        filters_list = []
+        if s.remote is not None:
+            filters_list.append(f"remote={s.remote}")
+        if s.country:
+            filters_list.append(f"country={s.country}")
+        if s.keyword:
+            filters_list.append(f"keyword={s.keyword}")
+        if s.exclude:
+            filters_list.append(f"exclude={s.exclude}")
+        if s.days:
+            filters_list.append(f"days={s.days}")
+        filters_str = ", ".join(filters_list) or "None"
+
+        table.add_row(
+            name,
+            ", ".join(s.sources),
+            s.profile or "None",
+            filters_str,
+            str(s.limit),
+        )
+
+    console.print()
+    console.print(table)
     console.print()
 
 
