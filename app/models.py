@@ -71,6 +71,8 @@ class Company(BaseModel):
     ai_summary: str | None = None
     ai_talking_points: list[str] = Field(default_factory=list)
     ai_fit_rationale: str | None = None
+    research_notes: dict[str, str] = Field(default_factory=dict)
+
 
     # --- Timestamps ---
     discovered_at: datetime

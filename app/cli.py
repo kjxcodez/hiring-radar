@@ -24,6 +24,7 @@ from app.discover.seed import load_seed_slugs, resolve_seed_companies
 from app.models import Company
 from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
+from app.enrich.research import research_company
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
@@ -1131,14 +1132,126 @@ def _render_preview_panel(company_name: str, recipient: str, subject: str, body:
 
     panel = Panel(
         content,
-        title=f"[bold magenta]Outreach Preview: {co.name}[/bold magenta]",
-        subtitle=f"[dim]Template: {res['template_used']}[/dim]",
+        title=f"[bold magenta]Outreach Preview: {company_name}[/bold magenta]",
+        subtitle=f"[dim]Template: {template_used}[/dim]",
         expand=False,
         border_style="cyan"
     )
     console.print()
     console.print(panel)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 15. research
+# ---------------------------------------------------------------------------
+
+@app.command(name="research")
+def research_cli(
+    company_name: str = typer.Argument(..., help="Name of the company to research (case-insensitive substring match)."),
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="LLM model override for OpenRouter calls. Default: None.",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--no-dry-run",
+            help="If True, shows prompt preview and exits without calling OpenRouter.",
+        ),
+    ] = False,
+) -> None:
+    """Perform deeper AI-based corporate research on a single company."""
+    # 1. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Error: Failed to read database from '{input}': {exc}[/red]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    # 2. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+
+    # 3. Perform research
+    console.print(f"Performing deeper AI research for [bold cyan]{co.name}[/bold cyan]...")
+    rate_limiter = RateLimiter(settings.request_delay_seconds)
+    try:
+        with get_http_client() as client:
+            co = research_company(co, client, rate_limiter, model=model, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Research failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 4. Display output
+    from rich.table import Table
+    table = Table(title=f"Deeper AI Research: {co.name}", show_header=True, header_style="bold magenta")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Details", style="bold white")
+
+    notes = co.research_notes or {}
+    table.add_row("Products", notes.get("products", "—"))
+    table.add_row("Likely Customers", notes.get("likely_customers", "—"))
+    table.add_row("Engineering Notes", notes.get("engineering_notes", "—"))
+    table.add_row("Recent Signals", notes.get("recent_signals", "—"))
+    console.print()
+    console.print(table)
+    console.print()
+
+    # 5. Write back to database if not dry_run
+    if not dry_run:
+        try:
+            input.write_bytes(
+                orjson.dumps(
+                    [c.model_dump(mode="json") for c in all_companies],
+                    option=orjson.OPT_INDENT_2,
+                )
+            )
+            console.print(f"Database successfully updated: [dim]{input}[/dim]\n")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to update database {input}: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
 
 
 # ---------------------------------------------------------------------------
