@@ -17,7 +17,7 @@ from typing import Callable
 from app.models import Company
 
 # Lazy imports keep startup time fast; the functions are referenced, not called.
-from app.discover import ashby, greenhouse, lever, remoteok, wwr
+from app.discover import ashby, greenhouse, lever, remoteok, workable, wwr
 
 SOURCE_REGISTRY: dict[str, Callable[[list[str]], list[Company]]] = {
     "ashby": ashby.discover,
@@ -31,6 +31,7 @@ SOURCE_REGISTRY: dict[str, Callable[[list[str]], list[Company]]] = {
     # NOTE: wwr.discover also takes `limit: int` (feed-based, not slug-based).
     # Same branching logic applies in cli.py.
     "wwr": wwr.discover,  # type: ignore[dict-item]
+    "workable": workable.discover,
 }
 
 __all__ = ["SOURCE_REGISTRY"]
