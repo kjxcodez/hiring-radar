@@ -20,6 +20,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hiring Radar Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -63,6 +64,35 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="text-3xl font-bold text-indigo-400" id="stat-enriched-ai">0</div>
       </div>
     </div>
+
+    <!-- Charts Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-4">
+      <!-- Chart 1: Jobs by Source -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
+        <h4 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Jobs by Source / Platform</h4>
+        <div class="flex-1 min-h-0 relative">
+          <canvas id="chart-source"></canvas>
+        </div>
+      </div>
+      <!-- Chart 2: Jobs by Country -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
+        <h4 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Jobs by Country (Heuristic)</h4>
+        <div class="flex-1 min-h-0 relative flex justify-center items-center">
+          <canvas id="chart-country" class="max-h-[220px] max-w-[220px]"></canvas>
+        </div>
+      </div>
+      <!-- Chart 3: Discoveries Over Time -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
+        <h4 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Discoveries (Last 14 Days)</h4>
+        <div class="flex-1 min-h-0 relative">
+          <canvas id="chart-timeline"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="text-xs text-slate-500 italic mb-8">
+      💡 Charts reflect all companies, independent of filters below.
+    </div>
+
 
     <!-- Filter Bar -->
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-6 shadow-md">
@@ -414,7 +444,170 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 
       // Initial run
       applyFilters();
+      initCharts();
     });
+
+    function initCharts() {
+      // 1. Jobs by Source
+      const sourceJobs = {};
+      COMPANIES.forEach(c => {
+        const src = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
+        const jobCount = c.jobs ? c.jobs.length : 0;
+        sourceJobs[src] = (sourceJobs[src] || 0) + jobCount;
+      });
+
+      // 2. Jobs by Country (approximate heuristic matching)
+      const countryJobs = {
+        "USA": 0,
+        "Canada": 0,
+        "UK": 0,
+        "Remote": 0,
+        "Other": 0
+      };
+
+      COMPANIES.forEach(c => {
+        if (c.jobs) {
+          c.jobs.forEach(j => {
+            const loc = (j.location || "").toLowerCase();
+            const remoteType = (j.remote_type || "").toLowerCase();
+
+            if (remoteType === "remote" || loc === "remote") {
+              countryJobs["Remote"]++;
+            } else if (loc.includes("usa") || loc.includes("united states") || loc.includes("u.s.")) {
+              countryJobs["USA"]++;
+            } else if (loc.includes("canada") || loc.includes("can")) {
+              countryJobs["Canada"]++;
+            } else if (loc.includes("uk") || loc.includes("united kingdom") || loc.includes("london") || loc.includes("great britain")) {
+              countryJobs["UK"]++;
+            } else {
+              countryJobs["Other"]++;
+            }
+          });
+        }
+      });
+
+      // 3. Discoveries per day over the last 14 days
+      const timelineData = {};
+      const dateLabels = [];
+      
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+        timelineData[dateStr] = 0;
+        
+        const label = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        dateLabels.push({ dateStr, label });
+      }
+
+      COMPANIES.forEach(c => {
+        if (c.discovered_at) {
+          const datePart = c.discovered_at.split('T')[0];
+          if (timelineData[datePart] !== undefined) {
+            timelineData[datePart]++;
+          }
+        }
+      });
+
+      const timelineValues = dateLabels.map(dl => timelineData[dl.dateStr]);
+
+      // --- Chart 1: Jobs by Source ---
+      new Chart(document.getElementById("chart-source"), {
+        type: 'bar',
+        data: {
+          labels: Object.keys(sourceJobs),
+          datasets: [{
+            label: 'Jobs Count',
+            data: Object.values(sourceJobs),
+            backgroundColor: 'rgba(34, 211, 238, 0.6)',
+            borderColor: 'rgb(34, 211, 238)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94a3b8', precision: 0 }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+
+      // --- Chart 2: Jobs by Country (Doughnut) ---
+      new Chart(document.getElementById("chart-country"), {
+        type: 'doughnut',
+        data: {
+          labels: Object.keys(countryJobs),
+          datasets: [{
+            data: Object.values(countryJobs),
+            backgroundColor: [
+              'rgba(59, 130, 246, 0.6)',
+              'rgba(168, 85, 247, 0.6)',
+              'rgba(236, 72, 153, 0.6)',
+              'rgba(16, 185, 129, 0.6)',
+              'rgba(100, 116, 139, 0.6)'
+            ],
+            borderColor: '#0f172a',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { color: '#94a3b8', font: { size: 10 } }
+            }
+          }
+        }
+      });
+
+      // --- Chart 3: Timeline ---
+      new Chart(document.getElementById("chart-timeline"), {
+        type: 'line',
+        data: {
+          labels: dateLabels.map(dl => dl.label),
+          datasets: [{
+            label: 'Companies Discovered',
+            data: timelineValues,
+            fill: true,
+            backgroundColor: 'rgba(99, 102, 241, 0.1)',
+            borderColor: 'rgb(99, 102, 241)',
+            tension: 0.3,
+            borderWidth: 2,
+            pointBackgroundColor: 'rgb(99, 102, 241)'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94a3b8', precision: 0 }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+    }
 
     function openModal(companyIndex) {
       const c = COMPANIES[companyIndex];
