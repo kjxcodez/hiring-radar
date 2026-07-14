@@ -7,6 +7,7 @@ Run as:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -21,7 +22,9 @@ from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs
 from app.models import Company
-from app.utils import setup_logging
+from app.scraper.company import scrape_company_page
+from app.scraper.contacts import extract_contacts
+from app.utils import RateLimiter, get_http_client, setup_logging
 
 # ---------------------------------------------------------------------------
 # App bootstrap
@@ -192,24 +195,135 @@ def scrape(
         Optional[str],
         typer.Option(
             "--company",
-            help="Single company name/slug for targeted debugging.",
+            help="Single company name (case-insensitive substring) for targeted debugging.",
         ),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force/--no-force",
+            help="Re-scrape even companies that already have contact data.",
+        ),
+    ] = False,
 ) -> None:
-    """Fetch full job listings and career-page data for discovered companies."""
-    console.print()
-    console.print("[bold yellow]⚠  scrape — not implemented yet[/bold yellow]")
-    console.print()
-    console.print(f"  [dim]Input:[/dim]   {input}")
+    """Fetch career-page data and extract contact hints for each discovered company."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+
+    # --- Load ---
+    if not input.exists():
+        console.print(f"[red]Input file not found:[/red] {input}")
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to load {input}:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    # --- Filter ---
+    targets: list[Company] = all_companies
     if company:
-        console.print(f"  [dim]Company:[/dim] {company}")
+        targets = [c for c in all_companies if company.lower() in c.name.lower()]
+        if not targets:
+            console.print(f"[yellow]No company matching '{company}' found in {input}.[/yellow]")
+            raise typer.Exit(code=0)
+        console.print(f"  Filtered to {len(targets)} company/companies matching '{company}'.")
+
+    # --- Counters ---
+    n_processed = 0
+    n_skipped = 0
+    n_new_emails = 0
+    n_failures = 0
+    stale_threshold = timedelta(days=7)
+
+    # --- Shared HTTP resources ---
+    rate_limiter = RateLimiter()
+
+    with get_http_client() as client:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Scraping", total=len(targets))
+
+            for co in targets:
+                progress.update(task, description=f"[bold cyan]{co.name[:40]}", advance=1)
+
+                # --- Skip logic (unless --force) ---
+                if not force:
+                    has_contacts = bool(co.generic_emails or co.recruiter_email)
+                    recently_scraped = (
+                        (datetime.now() - co.last_updated) < stale_threshold
+                    )
+                    if has_contacts and recently_scraped:
+                        n_skipped += 1
+                        logger.debug(
+                            "{name}: skipped (has contacts, scraped within 7 days)",
+                            name=co.name,
+                        )
+                        continue
+
+                # --- Scrape + extract ---
+                try:
+                    emails_before = len(co.generic_emails) + (1 if co.recruiter_email else 0)
+
+                    co, page_text = scrape_company_page(co, client, rate_limiter)
+
+                    if page_text is not None:
+                        extract_contacts(co, page_text)
+
+                    emails_after = len(co.generic_emails) + (1 if co.recruiter_email else 0)
+                    if emails_after > emails_before:
+                        n_new_emails += 1
+
+                    n_processed += 1
+
+                    # Check for failure notes
+                    if any(n.startswith("scrape_failed") for n in co.notes):
+                        n_failures += 1
+
+                except Exception as exc:  # noqa: BLE001
+                    n_failures += 1
+                    n_processed += 1
+                    co.notes.append(f"scrape_failed: unexpected error — {exc}")
+                    logger.warning("{name}: unexpected error — {exc}", name=co.name, exc=exc)
+
+    # --- Write back (full list, preserving untouched companies) ---
+    # Build a map of updated companies by dedupe_key, then re-merge.
+    updated_map: dict[str, Company] = {c.dedupe_key(): c for c in targets}
+    final: list[Company] = [
+        updated_map.get(c.dedupe_key(), c) for c in all_companies
+    ]
+
+    try:
+        input.write_bytes(
+            orjson.dumps(
+                [c.model_dump(mode="json") for c in final],
+                option=orjson.OPT_INDENT_2,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to write {input}:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    # --- Summary ---
     console.print()
-    console.print(
-        "  This command will iterate each company, pull its ATS job listings,"
-        " and enrich the companies.json in place."
-    )
-    console.print()
-    raise typer.Exit(code=0)
+    table = Table(title="scrape — results", show_header=True, header_style="bold magenta")
+    table.add_column("Metric", style="bold cyan", no_wrap=True)
+    table.add_column("Count", justify="right", style="bold white")
+    table.add_row("Companies processed", str(n_processed))
+    table.add_row("Companies skipped (fresh)", str(n_skipped))
+    table.add_row("Companies with new emails", str(n_new_emails))
+    table.add_row("Companies with scrape failures", str(n_failures))
+    console.print(table)
+    console.print(f"\n  [dim]Updated:[/dim] {input}\n")
 
 
 # ---------------------------------------------------------------------------

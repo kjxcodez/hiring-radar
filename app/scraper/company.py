@@ -51,7 +51,7 @@ def scrape_company_page(
     company: Company,
     client: httpx.Client,
     rate_limiter: RateLimiter,
-) -> Company:
+) -> tuple[Company, str | None]:
     """Fetch and parse a company's career/web page, enriching *company* in place.
 
     This is a best-effort operation:
@@ -69,7 +69,14 @@ def scrape_company_page(
         rate_limiter: Shared :class:`~app.utils.RateLimiter` for the session.
 
     Returns:
-        The same *company* object, mutated and with ``last_updated`` refreshed.
+        A 2-tuple of ``(company, page_text)``:
+
+        - *company* is the same object passed in, mutated and with
+          ``last_updated`` refreshed.
+        - *page_text* is the raw HTML string of the fetched page, or
+          ``None`` when the page was skipped or the request failed.  Pass
+          this directly to :func:`~app.scraper.contacts.extract_contacts`
+          to avoid a second HTTP round-trip.
     """
     # ------------------------------------------------------------------
     # 1. Determine URL
@@ -83,7 +90,7 @@ def scrape_company_page(
     if not url:
         _note(company, "scrape_skipped: no URL available")
         logger.debug("{name}: no URL to scrape", name=company.name)
-        return company
+        return company, None
 
     logger.info("scraping {name} → {url}", name=company.name, url=url)
 
@@ -99,7 +106,7 @@ def scrape_company_page(
     if not allowed:
         _note(company, "scrape_skipped: disallowed by robots.txt")
         logger.info("{name}: skipped (robots.txt)", name=company.name)
-        return company
+        return company, None
 
     # ------------------------------------------------------------------
     # 3. Fetch
@@ -107,7 +114,7 @@ def scrape_company_page(
     response = safe_get(client, url, rate_limiter)
     if response is None:
         _note(company, "scrape_failed: request error")
-        return company
+        return company, None
 
     # ------------------------------------------------------------------
     # 4. Parse
@@ -117,12 +124,13 @@ def scrape_company_page(
     except Exception as exc:  # noqa: BLE001
         _note(company, f"scrape_failed: parse error — {exc}")
         logger.warning("{name}: parse error — {exc}", name=company.name, exc=exc)
+        # Still return the text so extract_contacts can try email extraction.
 
     # ------------------------------------------------------------------
     # 5. Refresh timestamp
     # ------------------------------------------------------------------
     company.last_updated = datetime.now()
-    return company
+    return company, response.text
 
 
 # ---------------------------------------------------------------------------
