@@ -20,7 +20,7 @@ from app.config import settings
 from app.discover import SOURCE_REGISTRY
 from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
-from app.discover.seed import load_seed_slugs
+from app.discover.seed import load_seed_slugs, resolve_seed_companies
 from app.models import Company
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
@@ -85,16 +85,17 @@ def discover(
         raise typer.Exit(code=1)
 
     # --- Load seed slugs ---
-    # seed_file overrides per-source txt files when provided.
     seed_map: dict[str, list[str]] = load_seed_slugs(source_list)
-    if seed_file and seed_file.exists():
-        override_slugs = [
-            ln.strip()
-            for ln in seed_file.read_text(encoding="utf-8").splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
-        ]
-        seed_map = {src: override_slugs for src in source_list}
-        console.print(f"  [dim]Using seed file:[/dim] {seed_file} ({len(override_slugs)} slug(s))")
+
+    # --- Load seed file and resolve manually-noted company names ---
+    seed_companies: list[Company] = []
+    if seed_file:
+        if seed_file.exists():
+            console.print(f"  [dim]Resolving names in seed file:[/dim] {seed_file}…")
+            seed_companies = resolve_seed_companies(seed_file)
+            console.print(f"  [green]✓[/green]  Resolved {len(seed_companies)} company/companies from seed file")
+        else:
+            console.print(f"  [red]✗[/red]  Seed file not found: {seed_file}")
 
     # --- Discover per source ---
     all_new: list[Company] = []
@@ -126,6 +127,10 @@ def discover(
             console.print(f"  [green]✓[/green]  {src}: {len(discovered)} company/companies found")
         except Exception as exc:  # noqa: BLE001
             console.print(f"  [red]✗[/red]  {src}: error during discovery — {exc}")
+
+    # --- Merge resolved seed companies ---
+    if seed_companies:
+        all_new.extend(seed_companies)
 
     # --- Load existing companies.json (for incremental runs) ---
     companies_file = settings.output_dir / "companies.json"
