@@ -29,6 +29,7 @@ from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile
 from app.filters import apply_filters
 from app.outreach import generate_email, send_test_email, send_email
+from app.notify import send_telegram_message
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
 
@@ -1366,6 +1367,29 @@ def test_smtp(
     except Exception as exc:
         console.print(f"[bold red]Error configuring SMTP connection:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+# 11. test-telegram
+# ---------------------------------------------------------------------------
+
+@app.command(name="test-telegram")
+def test_telegram() -> None:
+    """Send a test message to verify Telegram Bot API settings."""
+    console.print("Sending Telegram test notification…")
+    try:
+        success = send_telegram_message("🔔 *Hiring Radar Test Notification*\n\nIf you see this, your Telegram Bot integration is working correctly! 🎉")
+        if success:
+            console.print("[bold green]✓ Test notification sent successfully![/bold green] Please check your Telegram chat.")
+        else:
+            console.print("[bold red]✗ Failed to send test notification.[/bold red] Ensure that TELEGRAM_BOT_TOKEN is set in .env, telegram.enabled is true and telegram.chat_id is set in config.yaml, and verify your bot credentials.")
+            raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[bold red]Error sending Telegram notification:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

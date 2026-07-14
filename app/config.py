@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     smtp_username: str | None = None
     smtp_app_password: str | None = None
 
+    # --- Telegram Notification ---
+    telegram_bot_token: str | None = None
+
 
 # ===========================================================================
 # Precedence Rule:
