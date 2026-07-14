@@ -26,7 +26,7 @@ from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
-from app.profiles import load_profile
+from app.profiles import load_profile, load_alert_rules
 from app.filters import apply_filters
 from app.outreach import generate_email, send_test_email, send_email
 from app.notify import send_telegram_message, format_new_company_alert
@@ -1423,6 +1423,13 @@ def watch_loop(
             help="Run a single discovery pass and exit immediately. Default: False.",
         ),
     ] = False,
+    alerts: Annotated[
+        bool,
+        typer.Option(
+            "--alerts/--no-alerts",
+            help="Enable filtering of Telegram alerts using rules defined in alerts.yaml. Default: True.",
+        ),
+    ] = True,
 ) -> None:
     """Watch sources continuously, notifying Telegram of new companies or job postings."""
     import time
@@ -1446,6 +1453,25 @@ def watch_loop(
     else:
         console.print(f"[bold cyan]Watch mode: starting polling loop (interval: {interval}m, sources: {sources})...[/bold cyan]")
         console.print("[dim]Press Ctrl+C to terminate watch loop cleanly.[/dim]\n")
+
+    # Load alert rules if alerts are enabled
+    alert_rules = []
+    if alerts:
+        alert_rules = load_alert_rules()
+        if alert_rules:
+            console.print(f"[bold green]✓ Loaded {len(alert_rules)} alert rule(s) from alerts.yaml[/bold green]")
+        else:
+            console.print("  [dim]No alert rules found in alerts.yaml — alerting on all new discoveries.[/dim]")
+
+    def should_alert_company(co_to_check: Company) -> bool:
+        if not alerts or not alert_rules:
+            return True
+        for rule in alert_rules:
+            filtered = apply_filters([co_to_check], profile=rule)
+            if filtered:
+                logger.debug("watch alert match: company '{company}' matched alert rule '{rule}'", company=co_to_check.name, rule=rule.name)
+                return True
+        return False
 
     try:
         while True:
@@ -1481,31 +1507,49 @@ def watch_loop(
             for key, new_co in new_state.items():
                 if key not in previous_state:
                     # Brand new company
-                    alert_msg = format_new_company_alert(new_co)
-                    console.print(f"  [green]+[/green] New company: [bold]{new_co.name}[/bold]. Sending Telegram alert…")
-                    send_telegram_message(alert_msg)
-                    new_companies_alerted += 1
-                    time.sleep(1)  # brief sleep to avoid burst rate-limits
+                    if should_alert_company(new_co):
+                        alert_msg = format_new_company_alert(new_co)
+                        console.print(f"  [green]+[/green] New company: [bold]{new_co.name}[/bold]. Sending Telegram alert…")
+                        send_telegram_message(alert_msg)
+                        new_companies_alerted += 1
+                        time.sleep(1)  # brief sleep to avoid burst rate-limits
                 else:
                     # Existing company, diff jobs list
                     prev_co = previous_state[key]
                     prev_urls = {j.job_url for j in prev_co.jobs}
                     new_jobs = [j for j in new_co.jobs if j.job_url not in prev_urls]
                     if new_jobs:
-                        first_new_job = new_jobs[0]
-                        count_new = len(new_jobs)
-                        
-                        # Short alert message
-                        msg = (
-                            f"🔔 *New Job Openings at {new_co.name}*\n\n"
-                            f"💼 Added {count_new} new role(s), including:\n"
-                            f"👉 [{first_new_job.job_title}]({first_new_job.job_url})\n\n"
-                            f"#hiring #{new_co.ats_platform or 'feed'}"
-                        )
-                        console.print(f"  [cyan]*[/cyan] {new_co.name}: {count_new} new job(s) found. Sending Telegram alert…")
-                        send_telegram_message(msg)
-                        new_jobs_alerted += 1
-                        time.sleep(1)  # brief sleep to avoid burst rate-limits
+                        new_jobs_co = new_co.model_copy(update={"jobs": new_jobs})
+                        if should_alert_company(new_jobs_co):
+                            # Filter new_jobs to those that match at least one rule
+                            if alerts and alert_rules:
+                                matched_jobs = []
+                                matched_urls = set()
+                                for rule in alert_rules:
+                                    filtered_res = apply_filters([new_jobs_co], profile=rule)
+                                    if filtered_res:
+                                        for j in filtered_res[0].jobs:
+                                            if j.job_url not in matched_urls:
+                                                matched_jobs.append(j)
+                                                matched_urls.add(j.job_url)
+                            else:
+                                matched_jobs = new_jobs
+
+                            if matched_jobs:
+                                first_new_job = matched_jobs[0]
+                                count_new = len(matched_jobs)
+                                
+                                # Short alert message
+                                msg = (
+                                    f"🔔 *New Job Openings at {new_co.name}*\n\n"
+                                    f"💼 Added {count_new} new role(s), including:\n"
+                                    f"👉 [{first_new_job.job_title}]({first_new_job.job_url})\n\n"
+                                    f"#hiring #{new_co.ats_platform or 'feed'}"
+                                )
+                                console.print(f"  [cyan]*[/cyan] {new_co.name}: {count_new} new job(s) matching alert rules found. Sending Telegram alert…")
+                                send_telegram_message(msg)
+                                new_jobs_alerted += 1
+                                time.sleep(1)  # brief sleep to avoid burst rate-limits
 
             # e. Cycle logging
             logger.info(

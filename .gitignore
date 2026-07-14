@@ -28,3 +28,7 @@ dist/
 build/
 *.egg-info/
 
+# Outreach alerts configuration
+alerts.yaml
+
+

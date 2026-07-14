@@ -61,3 +61,45 @@ def load_profile(name: str) -> SearchProfile:
         data["name"] = name
 
     return SearchProfile.model_validate(data)
+
+
+def load_alert_rules(path: Path = Path("alerts.yaml")) -> list[SearchProfile]:
+    """Read alerts.yaml and validate it into a list of SearchProfile rules.
+
+    If the file does not exist, logs an info message pointing to
+    alerts.example.yaml and returns an empty list.
+    """
+    from loguru import logger
+    if not path.exists():
+        logger.info(
+            "Alerts file '{path}' not found. To configure, copy alerts.example.yaml to alerts.yaml "
+            "and adjust rules.", path=str(path)
+        )
+        return []
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except Exception as exc:
+        logger.warning("Failed to parse alerts YAML file at {path}: {exc}", path=str(path), exc=exc)
+        return []
+
+    if not isinstance(data, list):
+        logger.warning("Invalid alerts data in {path}, expected a list of rule dictionaries.", path=str(path))
+        return []
+
+    rules = []
+    for idx, item in enumerate(data):
+        if not isinstance(item, dict):
+            logger.warning("Skipping rule {idx} in {path}: expected a dictionary.", idx=idx, path=str(path))
+            continue
+        # Ensure a name is set
+        if "name" not in item:
+            item["name"] = f"rule-{idx}"
+        try:
+            rules.append(SearchProfile.model_validate(item))
+        except Exception as exc:
+            logger.warning("Skipping invalid rule {idx} in {path}: {exc}", idx=idx, path=str(path), exc=exc)
+
+    return rules
+
