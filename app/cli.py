@@ -22,6 +22,7 @@ from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs, resolve_seed_companies
 from app.models import Company
+from app.exporters import export_csv, export_json
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.utils import RateLimiter, get_http_client, setup_logging
@@ -393,35 +394,103 @@ def export(
         str,
         typer.Option(
             "--granularity",
-            help="Export unit: 'company' (one row per company) or 'job' (one row per job).",
+            help="Export unit (CSV only): 'company' (one row per company) or 'job' (one row per job).",
             case_sensitive=False,
         ),
     ] = "company",
 ) -> None:
     """Export structured data to CSV or JSON for outreach tooling."""
-    if format not in ("csv", "json"):
-        console.print(f"[red]Error:[/red] --format must be 'csv' or 'json', got '{format}'.")
+    format_lower = format.lower().strip()
+    granularity_lower = granularity.lower().strip()
+
+    if format_lower not in ("csv", "json"):
+        console.print(f"[red]Error:[/red] --format must be 'csv' or 'json', got '{format_lower}'.")
         raise typer.Exit(code=1)
-    if granularity not in ("company", "job"):
+    if granularity_lower not in ("company", "job"):
         console.print(
-            f"[red]Error:[/red] --granularity must be 'company' or 'job', got '{granularity}'."
+            f"[red]Error:[/red] --granularity must be 'company' or 'job', got '{granularity_lower}'."
         )
         raise typer.Exit(code=1)
 
-    console.print()
-    console.print("[bold yellow]⚠  export — not implemented yet[/bold yellow]")
-    console.print()
-    console.print(f"  [dim]Format:[/dim]      {format}")
-    console.print(f"  [dim]Granularity:[/dim] {granularity}")
+    # 1. Load companies from settings.output_dir / "companies.json"
+    companies_file = settings.output_dir / "companies.json"
+    if not companies_file.exists():
+        console.print()
+        console.print("[bold red]No data to export.[/bold red]")
+        console.print(
+            f"  [dim]{companies_file}[/dim] does not exist.\n"
+            "  Run [bold]hiring-radar discover[/bold] and [bold]hiring-radar scrape[/bold] first."
+        )
+        console.print()
+        raise typer.Exit(code=1)
+
+    try:
+        raw_list: list[dict] = orjson.loads(companies_file.read_bytes())
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to read {companies_file}:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not isinstance(raw_list, list):
+        console.print(f"[red]Expected a JSON array in {companies_file}.[/red]")
+        raise typer.Exit(code=1)
+
+    # 2. Validate into list[Company]
+    companies: list[Company] = []
+    parse_errors = 0
+    for raw in raw_list:
+        try:
+            companies.append(Company.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            parse_errors += 1
+
+    if parse_errors:
+        console.print(
+            f"  [yellow]⚠[/yellow]  Skipped {parse_errors} malformed record(s) during validation."
+        )
+
+    # 3. Determine output path
     if output:
-        console.print(f"  [dim]Output:[/dim]      {output}")
+        output_path = output
+    else:
+        output_path = settings.output_dir / f"hiring-radar-export.{format_lower}"
+
+    # 4. Warn/Ignore granularity for JSON format
+    if format_lower == "json" and granularity_lower != "company":
+        console.print(
+            "[yellow]⚠  Warning: --granularity is ignored for JSON format "
+            "(JSON export is always full-fidelity).[/yellow]"
+        )
+
+    # 5. Call exporter
+    if format_lower == "json":
+        try:
+            export_json(companies, output_path)
+            entry_count = len(companies)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to export JSON to {output_path}:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+    else:
+        try:
+            export_csv(companies, output_path, granularity=granularity_lower)  # type: ignore[arg-type]
+            if granularity_lower == "company":
+                entry_count = len(companies)
+            else:
+                entry_count = sum(len(c.jobs) if c.jobs else 1 for c in companies)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to export CSV to {output_path}:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    # 6. Print Rich confirmation
     console.print()
-    console.print(
-        "  This command will read companies.json and write a flat"
-        f" [bold]{format.upper()}[/bold] file, one record per [bold]{granularity}[/bold]."
-    )
+    console.print("[bold green]✓ Export successful![/bold green]")
+    console.print(f"  [dim]Destination:[/dim]   [white]{output_path}[/white]")
+    console.print(f"  [dim]Companies:[/dim]     {len(companies)}")
+    if format_lower == "csv":
+        console.print(f"  [dim]CSV Rows:[/dim]      {entry_count}")
+    else:
+        console.print(f"  [dim]JSON Entries:[/dim]  {entry_count}")
     console.print()
-    raise typer.Exit(code=0)
+
 
 
 # ---------------------------------------------------------------------------
