@@ -1,0 +1,1 @@
+"""CLI entrypoint — placeholder Typer app. Commands to be added later."""

@@ -1,0 +1,10 @@
+typer
+httpx
+selectolax
+pydantic
+pydantic-settings
+rich
+loguru
+orjson
+tenacity
+python-dotenv
