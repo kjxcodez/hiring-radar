@@ -26,6 +26,7 @@ from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
 from app.enrich.company_score import score_company_attractiveness
+from app.resume.parser import load_resume_text
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
@@ -1374,6 +1375,189 @@ def score_company_cli(
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Failed to update database {input}: {exc}[/red]")
             raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+# 17. recommend
+# ---------------------------------------------------------------------------
+
+@app.command(name="recommend")
+def recommend_cli(
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    top: Annotated[
+        int,
+        typer.Option(
+            "--top",
+            help="Number of top recommended companies to display.",
+        ),
+    ] = 5,
+    resume: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--resume",
+            help="Path to the candidate resume file (.txt or .pdf).",
+        ),
+    ] = settings.resume_path,
+) -> None:
+    """Recommend the best companies to apply to, based on desirability and resume fit."""
+    import re
+    from rich.table import Table
+
+    # 1. Load companies
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to read database from '{input}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 2. Exclude contacted companies (any note containing "email_sent:")
+    uncontacted = [
+        c for c in all_companies
+        if not any(n.startswith("email_sent:") for n in c.notes)
+    ]
+
+    # 3. Handle resume if available
+    resume_text = None
+    if resume:
+        if resume.exists():
+            try:
+                resume_text = load_resume_text(resume)
+                console.print(f"Loaded resume from [bold cyan]{resume}[/bold cyan] to evaluate keyword-fit.")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[yellow]Warning: Could not load resume from '{resume}': {exc}. Proceeding without resume-fit.[/yellow]")
+        else:
+            console.print(f"[yellow]Warning: Resume path '{resume}' does not exist. Proceeding without resume-fit.[/yellow]")
+
+    # 4. Helper for tiebreaker recency
+    def get_recency(co: Company) -> datetime:
+        dates = [
+            datetime.combine(j.posted_date, datetime.min.time())
+            for j in co.jobs if j.posted_date
+        ]
+        if dates:
+            return max(dates)
+        return co.discovered_at or datetime.min
+
+    # Heuristic resume fit calculator
+    def calculate_heuristic_fit(co: Company, r_text: str) -> int:
+        r_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", r_text.lower()))
+        if not r_words:
+            return 0
+        co_text = (
+            (co.description or "")
+            + " "
+            + " ".join(j.job_title + " " + (j.description or "") for j in co.jobs)
+        )
+        co_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", co_text.lower()))
+        return len(r_words.intersection(co_words))
+
+    # 5. Rank companies
+    # Sort key:
+    # First: is_scored (bool) -> Scored companies above unscored.
+    # Second: company_score_overall (float) -> Higher score first.
+    # Third: job recency (datetime) -> Newer first.
+    scored_list = []
+    unscored_list = []
+
+    for co in uncontacted:
+        is_scored = co.company_score_overall is not None
+        recency = get_recency(co)
+        fit_score = 0
+        if resume_text:
+            fit_score = calculate_heuristic_fit(co, resume_text)
+
+        item = {
+            "company": co,
+            "is_scored": is_scored,
+            "overall": co.company_score_overall,
+            "recency": recency,
+            "fit_score": fit_score,
+        }
+        if is_scored:
+            scored_list.append(item)
+        else:
+            unscored_list.append(item)
+
+    # Sort scored: primarily overall score (descending), then recency (newest/descending)
+    scored_list.sort(key=lambda x: (x["overall"], x["recency"]), reverse=True)
+    # Sort unscored: primarily recency (newest/descending)
+    unscored_list.sort(key=lambda x: x["recency"], reverse=True)
+
+    ranked_items = scored_list + unscored_list
+    top_items = ranked_items[:top]
+
+    # 6. Render Output Table
+    table = Table(title="Top Company Recommendations", show_header=True, header_style="bold magenta")
+    table.add_column("Rank", justify="right", style="bold yellow")
+    table.add_column("Company", style="bold cyan")
+    table.add_column("Score", justify="right", style="bold white")
+    if resume_text:
+        table.add_column("Resume Fit (Overlap)", justify="right", style="bold green")
+    table.add_column("Top Job Opening", style="bold white")
+    table.add_column("Why / Rationale", style="italic dim white")
+
+    for i, item in enumerate(top_items, 1):
+        co = item["company"]
+        score_val = f"{item['overall']:.2f}" if item["is_scored"] else "unscored"
+        
+        # Get top job title
+        job_title = "—"
+        if co.jobs:
+            # Sort jobs by recency
+            jobs_sorted = sorted(
+                co.jobs,
+                key=lambda j: datetime.combine(j.posted_date, datetime.min.time()) if j.posted_date else datetime.min,
+                reverse=True
+            )
+            if jobs_sorted[0].job_title:
+                job_title = jobs_sorted[0].job_title
+
+        # Get rationale
+        rationale = "—"
+        for note in reversed(co.notes):
+            if note.startswith("score_rationale: "):
+                rationale = note[len("score_rationale: "):]
+                break
+
+        row = [
+            str(i),
+            co.name,
+            score_val,
+        ]
+        if resume_text:
+            row.append(str(item["fit_score"]))
+        row.extend([job_title, rationale])
+
+        table.add_row(*row)
+
+    console.print()
+    if not resume_text:
+        console.print("[dim]Note: No resume configured. Ranking on overall company score alone.[/dim]\n")
+    console.print(table)
+    console.print()
+
+    # 7. Print unscored warning/hint if any exist
+    unscored_count = len([x for x in uncontacted if x.company_score_overall is None])
+    if unscored_count > 0:
+        console.print(
+            f"[yellow]Hint: {unscored_count} companies unscored — run `jobs score-company` or a batch scorer to improve ranking quality.[/yellow]\n"
+        )
 
 
 # ---------------------------------------------------------------------------
