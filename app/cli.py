@@ -29,6 +29,7 @@ from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
 from app.filters import apply_filters
 from app.outreach import generate_email, send_test_email, send_email
+from app.dashboard import build_dashboard
 from app.notify import send_telegram_message, format_new_company_alert
 from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
 from app.utils import RateLimiter, get_http_client, setup_logging
@@ -1706,6 +1707,54 @@ def outreach_digest(
     console.print()
     console.print(panel)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 14. dashboard
+# ---------------------------------------------------------------------------
+
+@app.command(name="dashboard")
+def view_dashboard(
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Path to save the generated static HTML dashboard. Default: output/dashboard.html.",
+        ),
+    ] = Path("output/dashboard.html"),
+    open_browser: Annotated[
+        bool,
+        typer.Option(
+            "--open/--no-open",
+            help="Open the generated HTML dashboard directly in your default browser. Default: False.",
+        ),
+    ] = False,
+) -> None:
+    """Generate a self-contained static HTML dashboard for local data review."""
+    import webbrowser
+
+    console.print(f"Generating static dashboard from [bold cyan]{input}[/bold cyan]…")
+    try:
+        build_dashboard(input_path=input, output_path=output)
+        console.print(f"[bold green]✓ Dashboard generated successfully![/bold green] Saved to: [dim]{output}[/dim]")
+
+        if open_browser:
+            console.print("Opening dashboard in your default browser…")
+            webbrowser.open(output.absolute().as_uri())
+    except Exception as exc:
+        console.print(f"[bold red]Error generating dashboard:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+
 
 
 # ---------------------------------------------------------------------------
