@@ -18,6 +18,7 @@ from rich.table import Table
 from app.config import settings
 from app.discover import SOURCE_REGISTRY
 from app.discover import remoteok as _remoteok_mod
+from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs
 from app.models import Company
 from app.utils import setup_logging
@@ -97,13 +98,16 @@ def discover(
     for src in source_list:
         console.print(f"  Querying [bold]{src}[/bold]…")
         try:
-            # --- remoteok: single global feed, different signature ---
-            # remoteok.discover(limit) takes a job-count limit, not a slug list.
-            # Branch here explicitly rather than forcing a unified signature.
+            # --- feed-based sources: single global feed, limit-based signature ---
+            # remoteok and wwr both expose discover(limit: int) rather than
+            # discover(slugs: list[str]).  Branch explicitly — don't force a
+            # unified signature.
             if src == "remoteok":
                 discovered = _remoteok_mod.discover(limit=limit)
+            elif src == "wwr":
+                discovered = _wwr_mod.discover(limit=limit)
 
-            # --- slug-based ATS sources (greenhouse, lever, wwr, …) ---
+            # --- slug-based ATS sources (greenhouse, lever, …) ---
             else:
                 slugs = seed_map.get(src, [])
                 if not slugs:

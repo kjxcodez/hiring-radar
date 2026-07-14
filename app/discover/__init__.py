@@ -17,7 +17,7 @@ from typing import Callable
 from app.models import Company
 
 # Lazy imports keep startup time fast; the functions are referenced, not called.
-from app.discover import greenhouse, lever, remoteok
+from app.discover import greenhouse, lever, remoteok, wwr
 
 SOURCE_REGISTRY: dict[str, Callable[[list[str]], list[Company]]] = {
     "greenhouse": greenhouse.discover,
@@ -27,7 +27,9 @@ SOURCE_REGISTRY: dict[str, Callable[[list[str]], list[Company]]] = {
     # source name explicitly rather than calling it through the registry.
     # It is still registered here so source-name validation works.
     "remoteok": remoteok.discover,  # type: ignore[dict-item]
-    # "wwr": wwr.discover,  # added in step 1.5
+    # NOTE: wwr.discover also takes `limit: int` (feed-based, not slug-based).
+    # Same branching logic applies in cli.py.
+    "wwr": wwr.discover,  # type: ignore[dict-item]
 }
 
 __all__ = ["SOURCE_REGISTRY"]
