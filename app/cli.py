@@ -23,6 +23,7 @@ from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs, resolve_seed_companies
 from app.models import Company
 from app.exporters import export_csv, export_json
+from app.enrich import enrich as _enrich_ai
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.utils import RateLimiter, get_http_client, setup_logging
@@ -354,22 +355,121 @@ def enrich(
         bool,
         typer.Option("--dry-run/--no-dry-run", help="Preview without writing output."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force/--no-force",
+            help="Re-enrich even companies that already have AI summaries.",
+        ),
+    ] = False,
 ) -> None:
     """Generate AI summaries and talking points for each company via an LLM."""
-    console.print()
-    console.print("[bold yellow]⚠  enrich — not implemented yet[/bold yellow]")
-    console.print()
-    console.print(f"  [dim]Input:[/dim]    {input}")
-    console.print(f"  [dim]Provider:[/dim] {provider}")
-    console.print(f"  [dim]Model:[/dim]    {model or settings.openrouter_model}")
-    console.print(f"  [dim]Dry-run:[/dim]  {dry_run}")
-    console.print()
-    console.print(
-        "  This command will call the LLM for each company without an"
-        " ai_summary and write the results back to the input file."
-    )
-    console.print()
-    raise typer.Exit(code=0)
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+
+    provider_lower = provider.lower().strip()
+    if provider_lower != "openrouter":
+        console.print(f"[red]Error:[/red] Supported provider is only 'openrouter', got '{provider_lower}'.")
+        raise typer.Exit(code=1)
+
+    # 1. Load companies
+    if not input.exists():
+        console.print(f"[red]Input file not found:[/red] {input}")
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to load {input}:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    # 2. Filter companies to enrich
+    targets: list[Company] = []
+    skipped_count = 0
+    for company in all_companies:
+        if force or not company.ai_summary:
+            targets.append(company)
+        else:
+            skipped_count += 1
+
+    if not targets:
+        console.print()
+        console.print("[bold green]All companies already enriched.[/bold green]")
+        console.print(f"  Skipped {skipped_count} company/companies (use --force to re-enrich).")
+        console.print()
+        raise typer.Exit(code=0)
+
+    # 3. Process companies
+    n_enriched = 0
+    n_failures = 0
+
+    rate_limiter = RateLimiter()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Enriching", total=len(targets))
+
+        for co in targets:
+            progress.update(task, description=f"[bold cyan]{co.name[:40]}", advance=1)
+
+            # Apply rate limiting to OpenRouter API (using a pseudo-domain name)
+            if not dry_run:
+                rate_limiter.wait("https://openrouter.ai")
+
+            try:
+                _enrich_ai(co, model=model, dry_run=dry_run)
+
+                # Check for failure note
+                if any(n.startswith("enrich_failed") for n in co.notes):
+                    n_failures += 1
+                else:
+                    n_enriched += 1
+            except Exception as exc:  # noqa: BLE001
+                n_failures += 1
+                co.notes.append(f"enrich_failed: unexpected error — {exc}")
+                logger.warning("enrich/{name}: unexpected error — {exc}", name=co.name, exc=exc)
+
+    # 4 & 5. Dry run check / write back
+    if dry_run:
+        console.print()
+        console.print("[bold yellow]⚠ Dry Run Complete[/bold yellow]")
+        console.print(f"  Prompts generated/logged for [bold]{len(targets)}[/bold] companies.")
+        console.print("  [dim]No API requests were made and the output file was not updated.[/dim]")
+        console.print()
+    else:
+        # Re-merge updated targets with skipped ones
+        updated_map = {c.dedupe_key(): c for c in targets}
+        final = [updated_map.get(c.dedupe_key(), c) for c in all_companies]
+
+        try:
+            input.write_bytes(
+                orjson.dumps(
+                    [c.model_dump(mode="json") for c in final],
+                    option=orjson.OPT_INDENT_2,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to write {input}:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+        # 6. Print summary
+        console.print()
+        table = Table(title="enrich — results", show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="bold cyan", no_wrap=True)
+        table.add_column("Count", justify="right", style="bold white")
+        table.add_row("Companies enriched", str(n_enriched))
+        table.add_row("Companies skipped (already enriched)", str(skipped_count))
+        table.add_row("Companies with enrichment failures", str(n_failures))
+        console.print(table)
+        console.print(f"\n  [dim]Updated:[/dim] {input}\n")
 
 
 # ---------------------------------------------------------------------------
