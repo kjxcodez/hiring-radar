@@ -2773,6 +2773,64 @@ def mcp_serve(
 
 
 # ---------------------------------------------------------------------------
+# 23. agent
+# ---------------------------------------------------------------------------
+
+@app.command(name="agent")
+def agent(
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="OpenRouter model identifier override to use for the agent loop.",
+        ),
+    ] = None,
+) -> None:
+    """Start an interactive terminal reasoning agent loop (REPL)."""
+    from rich.prompt import Prompt
+    from rich.markdown import Markdown
+    from app.agent.planner import run_agent_turn
+
+    console.print(
+        "\n[bold purple]🤖 Hiring Radar Autonomous AI Agent REPL[/bold purple]\n"
+        "Type your requests to discover, score, research, or recommend jobs.\n"
+        "Type [bold red]exit[/bold red] or [bold red]quit[/bold red] to end the session.\n"
+    )
+
+    conversation_history: list[dict] = []
+
+    while True:
+        try:
+            user_msg = Prompt.ask("\n[bold cyan]Agent[/bold cyan]")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Session ended.[/yellow]")
+            break
+
+        if user_msg.strip().lower() in ("exit", "quit"):
+            console.print("[yellow]Goodbye![/yellow]")
+            break
+
+        if not user_msg.strip():
+            continue
+
+        with console.status("[bold yellow]Thinking...[/bold yellow]"):
+            try:
+                res = run_agent_turn(user_msg, conversation_history, model=model)
+                conversation_history = res["updated_history"]
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
+                continue
+
+        # Render tools called
+        if res.get("tool_calls_made"):
+            tools_str = ", ".join(res["tool_calls_made"])
+            console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
+
+        # Render reply
+        console.print(Markdown(res["reply"]))
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
