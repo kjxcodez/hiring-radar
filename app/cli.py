@@ -21,7 +21,7 @@ from app.discover import SOURCE_REGISTRY
 from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs, resolve_seed_companies
-from app.models import Company, ApplicationStatus
+from app.models import Company, ApplicationStatus, Application
 from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
@@ -1625,6 +1625,125 @@ def apply_cli(
     if resume:
         console.print(f"  [bold]Resume version set to:[/bold] '{resume}'\n")
     console.print(f"  [dim]Applications file updated:[/dim] {apps_path}\n")
+
+
+# ---------------------------------------------------------------------------
+# 20. note
+# ---------------------------------------------------------------------------
+
+@app.command(name="note")
+def note_cli(
+    company_name: str = typer.Argument(..., help="Name of the company (case-insensitive substring match)."),
+    add: Annotated[
+        Optional[str],
+        typer.Option(
+            "--add",
+            help="Text of the note to append.",
+        ),
+    ] = None,
+    list_notes: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--list/--no-list",
+            help="Whether to list all notes for this company.",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON companies database. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    apps_path: Annotated[
+        Path,
+        typer.Option(
+            "--apps-path",
+            help="Path to the JSON applications database. Default: output/applications.json.",
+        ),
+    ] = settings.output_dir / "applications.json",
+) -> None:
+    """Add or list free-text notes on a company application."""
+    # 1. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to read database from '{input}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 2. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+    key = co.dedupe_key()
+
+    # 3. Load applications database
+    apps = load_applications(apps_path)
+
+    # 4. Load or create Application entry
+    if key not in apps:
+        app_record = Application(
+            company_key=key,
+            status="discovered",
+            status_history=[{"status": "discovered", "date": date.today().isoformat()}],
+        )
+        apps[key] = app_record
+    else:
+        app_record = apps[key]
+
+    # 5. Resolve action flags
+    should_add = add is not None
+    should_list = list_notes if list_notes is not None else (not should_add)
+
+    # 6. Add note if requested
+    if should_add:
+        note_entry = f"{date.today().isoformat()}: {add}"
+        app_record.notes.append(note_entry)
+        try:
+            save_applications(apps, apps_path)
+            console.print(f"[green]✓ Note added successfully to {co.name}[/green]")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Error: Failed to save applications to '{apps_path}': {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
+    # 7. List notes if requested
+    if should_list:
+        console.print()
+        console.print(f"[bold magenta]Notes for {co.name}:[/bold magenta]")
+        if not app_record.notes:
+            console.print("  [dim]No notes yet.[/dim]")
+        else:
+            for note in app_record.notes:
+                console.print(f"  • {note}")
+        console.print()
+
 
 
 
