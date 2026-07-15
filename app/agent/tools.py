@@ -26,6 +26,7 @@ class AgentTool(BaseModel):
     description: str
     parameters_schema: dict[str, Any]
     fn: Callable[..., Any]
+    side_effecting: bool = False
 
     class Config:
         arbitrary_types_allowed = True
@@ -525,7 +526,8 @@ try:
             },
             "required": ["company_name"]
         },
-        fn=_apply_to_company_wrapper
+        fn=_apply_to_company_wrapper,
+        side_effecting=True
     )
 except ImportError as err:
     logger.warning("Skipped registering tool 'apply_to_company': %s", err)
@@ -604,6 +606,17 @@ try:
     )
 except ImportError as err:
     logger.warning("Skipped registering tool 'reject_company': %s", err)
+
+
+def execute_approved_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Execute a side-effecting tool after explicit human approval."""
+    if tool_name not in TOOL_REGISTRY:
+        return {"error": f"Tool '{tool_name}' is not registered."}
+    try:
+        tool_impl = TOOL_REGISTRY[tool_name]
+        return tool_impl.fn(**arguments)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Tool execution failed: {exc}"}
 
 
 # 3. Retrieve specs for OpenRouter/OpenAI tool-calling formatting

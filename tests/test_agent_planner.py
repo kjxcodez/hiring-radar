@@ -92,6 +92,7 @@ class TestAgentPlanner(unittest.TestCase):
 
         # Mock tool registry implementation
         mock_tool = MagicMock()
+        mock_tool.side_effecting = False
         mock_tool.fn.return_value = {"name": "Test Co", "description": "A great mock company"}
         mock_registry.__contains__.return_value = True
         mock_registry.__getitem__.return_value = mock_tool

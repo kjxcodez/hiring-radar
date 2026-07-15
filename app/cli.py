@@ -2813,21 +2813,64 @@ def agent(
         if not user_msg.strip():
             continue
 
-        with console.status("[bold yellow]Thinking...[/bold yellow]"):
-            try:
-                res = run_agent_turn(user_msg, conversation_history, model=model)
-                conversation_history = res["updated_history"]
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
+        user_input_to_send = user_msg
+        while True:
+            with console.status("[bold yellow]Thinking...[/bold yellow]"):
+                try:
+                    res = run_agent_turn(user_input_to_send, conversation_history, model=model)
+                    conversation_history = res["updated_history"]
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
+                    break
+
+            if "pending_approval" in res:
+                pending = res["pending_approval"]
+                tool_name = pending["tool"]
+                args = pending["arguments"]
+                tc_id = pending["tool_call_id"]
+                desc = pending["description"]
+
+                # Render tools called so far
+                if res.get("tool_calls_made"):
+                    tools_str = ", ".join(res["tool_calls_made"])
+                    console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
+
+                console.print(f"\n[bold yellow]⚠️ Pending Approval:[/bold yellow] Agent wants to {desc}")
+                approved = typer.confirm("Approve this action?")
+
+                from app.agent.tools import execute_approved_tool
+                from app.agent.memory import log_decision
+                import json
+
+                if approved:
+                    log_decision(f"Approved and executed tool '{tool_name}' with arguments {args}")
+                    with console.status(f"[bold yellow]Executing {tool_name}...[/bold yellow]"):
+                        tool_result = execute_approved_tool(tool_name, args)
+                else:
+                    log_decision(f"Declined execution of tool '{tool_name}' with arguments {args}")
+                    tool_result = {"error": "User declined to approve this action."}
+
+                # Append tool result message
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": tool_name,
+                    "content": json.dumps(tool_result),
+                }
+                conversation_history.append(tool_msg)
+
+                # Resume the turn
+                user_input_to_send = ""
                 continue
+            else:
+                # Render tools called
+                if res.get("tool_calls_made"):
+                    tools_str = ", ".join(res["tool_calls_made"])
+                    console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
 
-        # Render tools called
-        if res.get("tool_calls_made"):
-            tools_str = ", ".join(res["tool_calls_made"])
-            console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
-
-        # Render reply
-        console.print(Markdown(res["reply"]))
+                # Render reply
+                console.print(Markdown(res["reply"]))
+                break
 
 
 # ---------------------------------------------------------------------------

@@ -66,8 +66,19 @@ def build_agent_system_prompt() -> str:
     )
 
 
+def get_approval_description(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Generate a human-readable description of a side-effecting action."""
+    if tool_name == "apply_to_company":
+        company = arguments.get("company_name", "unknown company")
+        status = arguments.get("status", "applied")
+        version = arguments.get("resume_version")
+        v_str = f" with resume version '{version}'" if version else ""
+        return f"update application status for '{company}' to '{status}'{v_str}"
+    return f"execute tool '{tool_name}' with arguments {arguments}"
+
+
 def run_agent_turn(
-    user_message: str,
+    user_message: str | None,
     conversation_history: list[dict[str, Any]],
     model: str | None = None,
 ) -> dict[str, Any]:
@@ -81,8 +92,9 @@ def run_agent_turn(
             "OPENROUTER_API_KEY is not set. Please add it to your .env file."
         )
 
-    # 1. Append user's new message to history
-    conversation_history.append({"role": "user", "content": user_message})
+    # 1. Append user's new message to history (if provided)
+    if user_message:
+        conversation_history.append({"role": "user", "content": user_message})
 
     # 2. Resolve target model and headers
     target_model = model or settings.openrouter_model
@@ -180,6 +192,19 @@ def run_agent_turn(
                         tool_result = {"error": f"Invalid arguments format (not valid JSON): {e}"}
                 else:
                     args = args_raw
+
+                # Mechanical Approval Gate check
+                if func_name in TOOL_REGISTRY and TOOL_REGISTRY[func_name].side_effecting:
+                    return {
+                        "pending_approval": {
+                            "tool": func_name,
+                            "tool_call_id": tc_id,
+                            "arguments": args,
+                            "description": get_approval_description(func_name, args)
+                        },
+                        "updated_history": conversation_history,
+                        "tool_calls_made": tool_calls_made,
+                    }
 
                 # Execute tool
                 if func_name not in TOOL_REGISTRY:
