@@ -27,6 +27,7 @@ from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
 from app.enrich.company_score import score_company_attractiveness
 from app.resume.parser import load_resume_text
+from app.resume.suggestions import suggest_resume_tailoring
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
@@ -1375,6 +1376,149 @@ def score_company_cli(
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Failed to update database {input}: {exc}[/red]")
             raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+# 18. tailor
+# ---------------------------------------------------------------------------
+
+@app.command(name="tailor")
+def tailor_cli(
+    company_name: str = typer.Argument(..., help="Name of the company to tailor the resume for (case-insensitive substring match)."),
+    resume: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--resume",
+            help="Path to the candidate resume file (.txt or .pdf).",
+        ),
+    ] = settings.resume_path,
+    model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--model",
+            help="LLM model override for OpenRouter calls. Default: None.",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--no-dry-run",
+            help="If True, shows prompt preview and exits without calling OpenRouter.",
+        ),
+    ] = False,
+) -> None:
+    """Generate advisory, non-destructive suggestions to tailor your resume for a specific company."""
+    from rich.panel import Panel
+    from rich.console import Group
+    from rich.text import Text
+    from datetime import date
+
+    # 1. Load resume
+    if not resume:
+        console.print(
+            "[red]Error: Resume path is not set.[/red]\n"
+            "Please configure RESUME_PATH in your .env file or pass the --resume option."
+        )
+        raise typer.Exit(code=1)
+
+    if not resume.exists():
+        console.print(f"[red]Error: Resume file '{resume}' not found.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        resume_text = load_resume_text(resume)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to load resume text from '{resume}': {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    # 2. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to read database from '{input}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 3. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+
+    # 4. Generate tailoring suggestions
+    console.print(f"Analyzing resume fit and generating tailoring guidelines for [bold cyan]{co.name}[/bold cyan]...")
+    try:
+        res = suggest_resume_tailoring(co, resume_text, model=model, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Suggestions generation failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 5. Display recommendations
+    missing_str = ", ".join(res.get("missing_keywords") or []) or "None"
+    projects_list = "\n".join(f"- {p}" for p in (res.get("projects_to_emphasize") or [])) or "None"
+
+    group = Group(
+        Panel(Text(missing_str, style="bold red"), title="[bold cyan]Missing Keywords[/bold cyan]", border_style="red"),
+        Panel(Text(projects_list, style="white"), title="[bold cyan]Projects/Experience to Foreground[/bold cyan]", border_style="green"),
+        Panel(Text(res.get("summary_suggestion") or "—", style="italic white"), title="[bold cyan]Tailored Summary/Objective[/bold cyan]", border_style="magenta"),
+        Panel(Text(res.get("reorder_suggestion") or "—", style="white"), title="[bold cyan]Skills Reordering Advice[/bold cyan]", border_style="blue"),
+    )
+
+    console.print()
+    console.print(Panel(group, title=f"[bold magenta]Resume Tailoring Guide: {co.name}[/bold magenta]", expand=False))
+    console.print()
+
+    # 6. Append note and save back to database if not dry run
+    if not dry_run:
+        note_text = f"tailoring_suggested: {date.today().isoformat()}"
+        if note_text not in co.notes:
+            co.notes.append(note_text)
+        co.last_updated = datetime.now()
+
+        try:
+            input.write_bytes(
+                orjson.dumps(
+                    [c.model_dump(mode="json") for c in all_companies],
+                    option=orjson.OPT_INDENT_2,
+                )
+            )
+            console.print(f"Database successfully updated: [dim]{input}[/dim]\n")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to update database {input}: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
 
 
 # ---------------------------------------------------------------------------
