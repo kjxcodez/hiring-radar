@@ -13,9 +13,23 @@ Exposes key jobs search, company research, and application tracking capabilities
 
 ## Setup & Testing
 
+### Command Line Wrapper (Recommended)
+
+Start the server using the unified CLI wrapper tool:
+
+**Stdio transport (default)**:
+```bash
+.venv\Scripts\python.exe -m app.cli mcp-serve
+```
+
+**HTTP/SSE network transport**:
+```bash
+.venv\Scripts\python.exe -m app.cli mcp-serve --transport sse --port 8811
+```
+
 ### Standalone execution
 
-Start the server locally over standard input/output (stdio) transport:
+Start the server standalone (reads environment configurations: `MCP_TRANSPORT=stdio|sse`, `MCP_HTTP_PORT=8811`, `MCP_HTTP_HOST=0.0.0.0`):
 
 ```bash
 .venv\Scripts\python.exe -m mcp_server.server

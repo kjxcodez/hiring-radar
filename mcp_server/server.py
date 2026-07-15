@@ -257,9 +257,25 @@ def resume_match(company_name: str) -> str:
 
 # 5. Server entrypoint
 def main() -> None:
-    """Run the MCP server over stdio transport."""
-    app.run(transport="stdio")
+    """Run the MCP server over stdio or HTTP/SSE transport based on environment variables."""
+    import os
+    transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+    port_str = os.getenv("MCP_HTTP_PORT", "8811")
+    host = os.getenv("MCP_HTTP_HOST", "0.0.0.0")
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 8811
+
+    if transport in ("http", "sse"):
+        app.settings.host = host
+        app.settings.port = port
+        app.run(transport="sse")
+    else:
+        app.run(transport="stdio")
 
 
 if __name__ == "__main__":
     main()
+

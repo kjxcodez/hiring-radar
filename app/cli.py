@@ -2728,11 +2728,48 @@ def view_dashboard(
         raise typer.Exit(code=1) from exc
 
 
-# ---------------------------------------------------------------------------
-
-
 
 # ---------------------------------------------------------------------------
+# 22. mcp-serve
+# ---------------------------------------------------------------------------
+
+@app.command(name="mcp-serve")
+def mcp_serve(
+    transport: Annotated[
+        str,
+        typer.Option(
+            "--transport",
+            help="Transport protocol to run. Options: 'stdio', 'http', or 'sse'. Default: 'stdio'.",
+        ),
+    ] = "stdio",
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            help="Port to bind the HTTP/SSE transport server. Default: 8811.",
+        ),
+    ] = 8811,
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help="Host address to bind the HTTP/SSE transport server. Default: '0.0.0.0'.",
+        ),
+    ] = "0.0.0.0",
+) -> None:
+    """Start the Model Context Protocol (MCP) server integration."""
+    import os
+    os.environ["MCP_TRANSPORT"] = transport.lower()
+    os.environ["MCP_HTTP_PORT"] = str(port)
+    os.environ["MCP_HTTP_HOST"] = host
+
+    console.print(f"[bold green]Starting MCP server...[/bold green]")
+    console.print(f"  [dim]Transport:[/dim] {transport}")
+    if transport.lower() in ("http", "sse"):
+        console.print(f"  [dim]Binding:[/dim]   {host}:{port}")
+
+    from mcp_server.server import main
+    main()
 
 
 # ---------------------------------------------------------------------------
