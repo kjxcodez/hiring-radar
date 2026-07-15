@@ -110,6 +110,55 @@ def list_applications() -> list[dict] | dict[str, str]:
         return {"error": f"Failed to list applications: {exc}"}
 
 
+# ---------------------------------------------------------------------------
+# MCP Resources
+# ---------------------------------------------------------------------------
+
+@app.resource("hiring-radar://companies", mime_type="application/json", description="The full list of companies and their scraped job postings.")
+def get_companies_resource() -> list[dict]:
+    """Read the full companies database file from disk."""
+    companies_file = settings.output_dir / "companies.json"
+    if not companies_file.exists():
+        return []
+    return orjson.loads(companies_file.read_bytes())
+
+
+@app.resource("hiring-radar://jobs", mime_type="application/json", description="A flattened list of all active job postings across all tracked companies.")
+def get_jobs_resource() -> list[dict]:
+    """Compile and flatten all job openings across all companies in the database."""
+    companies_file = settings.output_dir / "companies.json"
+    if not companies_file.exists():
+        return []
+    companies = orjson.loads(companies_file.read_bytes())
+    flattened = []
+    for c in companies:
+        for j in c.get("jobs", []):
+            job_entry = dict(j)
+            job_entry["company_name"] = c.get("name")
+            flattened.append(job_entry)
+    return flattened
+
+
+@app.resource("hiring-radar://profiles", mime_type="application/json", description="List of search profile labels configured in the system.")
+def get_profiles_resource() -> list[str]:
+    """Get the stems of all available SearchProfile configurations."""
+    try:
+        from app.profiles import list_profiles
+        return list_profiles()
+    except (ImportError, AttributeError):
+        return ["ImportError: profiles module or list_profiles is not available yet."]
+
+
+@app.resource("hiring-radar://templates", mime_type="application/json", description="List of outreach message templates available in the system.")
+def get_templates_resource() -> list[str]:
+    """Get the stems of all available cold email templates."""
+    try:
+        from app.outreach.templates import list_templates
+        return list_templates()
+    except (ImportError, AttributeError):
+        return ["ImportError: outreach templates module or list_templates is not available yet."]
+
+
 # 5. Server entrypoint
 def main() -> None:
     """Run the MCP server over stdio transport."""
