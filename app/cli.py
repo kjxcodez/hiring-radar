@@ -27,6 +27,7 @@ from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
 from app.enrich.company_score import score_company_attractiveness
 from app.resume.parser import load_resume_text
+from app.resume.versions import resolve_resume_version, list_resume_versions
 from app.resume.suggestions import suggest_resume_tailoring
 from app.tracker.status import load_applications, save_applications, set_status
 from app.scraper.company import scrape_company_page
@@ -57,6 +58,20 @@ console = Console()
 def _bootstrap() -> None:
     """Initialise logging before every command."""
     setup_logging()
+
+
+def resolve_resume_path(resume_arg: Optional[str]) -> Optional[Path]:
+    """Resolve a resume option (label or path string) to a Path, falling back to settings.resume_path."""
+    if not resume_arg:
+        return settings.resume_path
+
+    # Try as a file path first
+    p = Path(resume_arg)
+    if p.exists() and p.is_file():
+        return p
+
+    # Otherwise, resolve as version label
+    return resolve_resume_version(resume_arg)
 
 
 # ---------------------------------------------------------------------------
@@ -1264,6 +1279,13 @@ def research_cli(
 @app.command(name="score-company")
 def score_company_cli(
     company_name: str = typer.Argument(..., help="Name of the company to evaluate attractiveness for (case-insensitive substring match)."),
+    resume: Annotated[
+        Optional[str],
+        typer.Option(
+            "--resume",
+            help="Resume version label or path to override default resume.",
+        ),
+    ] = None,
     model: Annotated[
         Optional[str],
         typer.Option(
@@ -1287,6 +1309,16 @@ def score_company_cli(
     ] = False,
 ) -> None:
     """Evaluate a company's desirability and attractiveness across five axes."""
+    # Resolve and validate resume if given
+    if resume:
+        try:
+            resume_p = resolve_resume_path(resume)
+            if resume_p:
+                load_resume_text(resume_p)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Error loading resume version '{resume}': {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
     # 1. Load companies from input
     if not input.exists():
         console.print(
@@ -1387,12 +1419,12 @@ def score_company_cli(
 def tailor_cli(
     company_name: str = typer.Argument(..., help="Name of the company to tailor the resume for (case-insensitive substring match)."),
     resume: Annotated[
-        Optional[Path],
+        Optional[str],
         typer.Option(
             "--resume",
-            help="Path to the candidate resume file (.txt or .pdf).",
+            help="Resume version label or path to override default resume.",
         ),
-    ] = settings.resume_path,
+    ] = None,
     model: Annotated[
         Optional[str],
         typer.Option(
@@ -1422,21 +1454,27 @@ def tailor_cli(
     from datetime import date
 
     # 1. Load resume
-    if not resume:
+    try:
+        resume_p = resolve_resume_path(resume)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error resolving resume version '{resume}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if not resume_p:
         console.print(
             "[red]Error: Resume path is not set.[/red]\n"
             "Please configure RESUME_PATH in your .env file or pass the --resume option."
         )
         raise typer.Exit(code=1)
 
-    if not resume.exists():
-        console.print(f"[red]Error: Resume file '{resume}' not found.[/red]")
+    if not resume_p.exists():
+        console.print(f"[red]Error: Resume file '{resume_p}' not found.[/red]")
         raise typer.Exit(code=1)
 
     try:
-        resume_text = load_resume_text(resume)
+        resume_text = load_resume_text(resume_p)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error: Failed to load resume text from '{resume}': {exc}[/red]")
+        console.print(f"[red]Error: Failed to load resume text from '{resume_p}': {exc}[/red]")
         raise typer.Exit(code=1)
 
     # 2. Load companies from input
@@ -1597,6 +1635,14 @@ def apply_cli(
 
     co = matches[0]
     key = co.dedupe_key()
+
+    # Validate resume version if given
+    if resume:
+        try:
+            resolve_resume_version(resume)
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
 
     # 3. Load applications database
     apps = load_applications(apps_path)
@@ -1768,12 +1814,12 @@ def recommend_cli(
         ),
     ] = 5,
     resume: Annotated[
-        Optional[Path],
+        Optional[str],
         typer.Option(
             "--resume",
-            help="Path to the candidate resume file (.txt or .pdf).",
+            help="Resume version label or path to override default resume.",
         ),
-    ] = settings.resume_path,
+    ] = None,
 ) -> None:
     """Recommend the best companies to apply to, based on desirability and resume fit."""
     import re
@@ -1804,15 +1850,22 @@ def recommend_cli(
 
     # 3. Handle resume if available
     resume_text = None
-    if resume:
-        if resume.exists():
+    resume_p = None
+    try:
+        resume_p = resolve_resume_path(resume)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error resolving resume version '{resume}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if resume_p:
+        if resume_p.exists():
             try:
-                resume_text = load_resume_text(resume)
-                console.print(f"Loaded resume from [bold cyan]{resume}[/bold cyan] to evaluate keyword-fit.")
+                resume_text = load_resume_text(resume_p)
+                console.print(f"Loaded resume from [bold cyan]{resume_p}[/bold cyan] to evaluate keyword-fit.")
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[yellow]Warning: Could not load resume from '{resume}': {exc}. Proceeding without resume-fit.[/yellow]")
+                console.print(f"[yellow]Warning: Could not load resume from '{resume_p}': {exc}. Proceeding without resume-fit.[/yellow]")
         else:
-            console.print(f"[yellow]Warning: Resume path '{resume}' does not exist. Proceeding without resume-fit.[/yellow]")
+            console.print(f"[yellow]Warning: Resume file '{resume_p}' not found. Proceeding without resume-fit.[/yellow]")
 
     # 4. Helper for tiebreaker recency
     def get_recency(co: Company) -> datetime:

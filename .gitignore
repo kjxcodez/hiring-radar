@@ -31,4 +31,5 @@ build/
 # Outreach alerts configuration
 alerts.yaml
 
-
+# Personal resumes variant directory
+resumes/
