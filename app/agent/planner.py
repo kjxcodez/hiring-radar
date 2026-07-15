@@ -41,6 +41,15 @@ def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> ht
 
 def build_agent_system_prompt() -> str:
     """Return the system instructions for the AI Agent planner loop."""
+    from app.agent.memory import load_memory
+
+    mem = load_memory()
+    prefs = mem.get("preferences", {})
+    rejected = mem.get("rejected_companies", [])
+
+    prefs_summary = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) if prefs else "None"
+    rejected_summary = ", ".join(rejected) if rejected else "None"
+
     return (
         "You are an expert AI agent assistant for job application research and outreach. "
         "Your task is to help the user manage their job search workflow using the tools provided. "
@@ -49,7 +58,11 @@ def build_agent_system_prompt() -> str:
         "marking an application as contacted, or changing application status) unless the user has explicitly "
         "reviewed and confirmed the action in the chat history first. If the user asks for a side-effecting action, "
         "you must first explain what you intend to do, present the parameters/content to the user for review, "
-        "and ask for explicit confirmation before calling the tool."
+        "and ask for explicit confirmation before calling the tool.\n\n"
+        "--- PERSISTENT USER PREFERENCES & CONTEXT ---\n"
+        f"Preferences:\n{prefs_summary}\n\n"
+        f"Rejected/Excluded Companies: {rejected_summary}\n"
+        "--------------------------------------------"
     )
 
 

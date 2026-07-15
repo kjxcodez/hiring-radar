@@ -59,7 +59,26 @@ try:
 
     def _search_jobs_wrapper(sources: list[str], limit: int = 50) -> list[dict] | dict[str, str]:
         # search_jobs is already protected and returns serializable data
-        return search_jobs(sources, limit)
+        jobs = search_jobs(sources, limit)
+        if isinstance(jobs, dict) and "error" in jobs:
+            return jobs
+
+        from app.agent.memory import load_memory
+        mem = load_memory()
+        rejected = set(mem.get("rejected_companies", []))
+        if not rejected:
+            return jobs
+
+        filtered = []
+        for co_dict in jobs:
+            try:
+                co_obj = Company.model_validate(co_dict)
+                if co_obj.dedupe_key() in rejected:
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+            filtered.append(co_dict)
+        return filtered
 
     TOOL_REGISTRY["search_jobs"] = AgentTool(
         name="search_jobs",
@@ -341,9 +360,14 @@ try:
             ]
 
             # Filter out contacted
+            from app.agent.memory import load_memory
+            mem = load_memory()
+            rejected = set(mem.get("rejected_companies", []))
+
             uncontacted = [
                 c for c in all_companies
                 if not any(n.startswith("email_sent:") for n in c.notes)
+                and c.dedupe_key() not in rejected
             ]
 
             # Load resume fit if available
@@ -505,6 +529,81 @@ try:
     )
 except ImportError as err:
     logger.warning("Skipped registering tool 'apply_to_company': %s", err)
+
+
+# -- TOOL: remember_preference --
+try:
+    from app.agent.memory import remember_preference
+
+    def _remember_preference_wrapper(key: str, value: str) -> dict:
+        try:
+            remember_preference(key, value)
+            return {"status": "success", "key": key, "value": value}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    TOOL_REGISTRY["remember_preference"] = AgentTool(
+        name="remember_preference",
+        description="Store or update a persistent user preference mapping (e.g. key='work_mode', value='Remote only').",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Category key for the preference."
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Description/value of the preference."
+                }
+            },
+            "required": ["key", "value"]
+        },
+        fn=_remember_preference_wrapper
+    )
+except ImportError as err:
+    logger.warning("Skipped registering tool 'remember_preference': %s", err)
+
+
+# -- TOOL: reject_company --
+try:
+    from app.agent.memory import reject_company
+
+    def _reject_company_wrapper(company_key: str, reason: str) -> dict:
+        try:
+            companies_file = settings.output_dir / "companies.json"
+            try:
+                co, _ = _find_company_by_name(company_key, companies_file)
+                resolved_key = co.dedupe_key()
+            except Exception:  # noqa: BLE001
+                resolved_key = company_key.strip().lower()
+
+            reject_company(resolved_key, reason)
+            return {"status": "success", "rejected_company_key": resolved_key}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    TOOL_REGISTRY["reject_company"] = AgentTool(
+        name="reject_company",
+        description="Reject a company to exclude it from all future job search and recommendation results.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "company_key": {
+                    "type": "string",
+                    "description": "Name or dedupe key of the company to reject."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for rejecting the company."
+                }
+            },
+            "required": ["company_key", "reason"]
+        },
+        fn=_reject_company_wrapper
+    )
+except ImportError as err:
+    logger.warning("Skipped registering tool 'reject_company': %s", err)
 
 
 # 3. Retrieve specs for OpenRouter/OpenAI tool-calling formatting
