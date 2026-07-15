@@ -95,3 +95,21 @@ class Company(BaseModel):
         if self.domain:
             return self.domain.lower().strip()
         return self.name.lower().strip()
+
+
+ApplicationStatus = Literal["discovered", "researched", "applied", "interviewing", "rejected", "offer"]
+
+
+class Application(BaseModel):
+    """An tracking record for a job application process with a specific company."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    company_key: str          # Company.dedupe_key()
+    status: ApplicationStatus = "discovered"
+    status_history: list[dict] = Field(default_factory=list)   # [{"status": ..., "date": iso string}, ...]
+    applied_date: date | None = None
+    resume_version: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    last_contact_date: date | None = None
+

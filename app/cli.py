@@ -21,13 +21,14 @@ from app.discover import SOURCE_REGISTRY
 from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs, resolve_seed_companies
-from app.models import Company
+from app.models import Company, ApplicationStatus
 from app.exporters import export_csv, export_json
 from app.enrich import enrich as _enrich_ai
 from app.enrich.research import research_company
 from app.enrich.company_score import score_company_attractiveness
 from app.resume.parser import load_resume_text
 from app.resume.suggestions import suggest_resume_tailoring
+from app.tracker.status import load_applications, save_applications, set_status
 from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.profiles import load_profile, load_alert_rules
@@ -1518,6 +1519,112 @@ def tailor_cli(
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Failed to update database {input}: {exc}[/red]")
             raise typer.Exit(code=1) from exc
+
+
+# ---------------------------------------------------------------------------
+# 19. apply
+# ---------------------------------------------------------------------------
+
+@app.command(name="apply")
+def apply_cli(
+    company_name: str = typer.Argument(..., help="Name of the company to apply to (case-insensitive substring match)."),
+    status: Annotated[
+        ApplicationStatus,
+        typer.Option(
+            "--status",
+            help="The new status to set for the application.",
+        ),
+    ] = "applied",
+    resume: Annotated[
+        Optional[str],
+        typer.Option(
+            "--resume",
+            help="Resume version label to record (e.g. 'v1', 'tailored-react').",
+        ),
+    ] = None,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON companies database. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    apps_path: Annotated[
+        Path,
+        typer.Option(
+            "--apps-path",
+            help="Path to the JSON applications database. Default: output/applications.json.",
+        ),
+    ] = settings.output_dir / "applications.json",
+) -> None:
+    """Record or update a job application status for a specific company."""
+    # 1. Load companies from input
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' and 'hiring-radar scrape' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to read database from '{input}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 2. Find matching company
+    matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+
+    if not matches:
+        suggestions = [
+            c.name for c in all_companies
+            if company_name.lower() in c.name.lower() or c.name.lower() in company_name.lower()
+        ]
+        console.print(f"[red]Error: Company '{company_name}' not found.[/red]")
+        if suggestions:
+            console.print(f"Did you mean one of these? {', '.join(suggestions)}")
+        raise typer.Exit(code=1)
+
+    if len(matches) > 1:
+        console.print(f"[red]Error: Multiple companies match '{company_name}':[/red]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        console.print("Please specify a more precise name.")
+        raise typer.Exit(code=1)
+
+    co = matches[0]
+    key = co.dedupe_key()
+
+    # 3. Load applications database
+    apps = load_applications(apps_path)
+
+    # 4. Set application status
+    old_app = apps.get(key)
+    old_status = old_app.status if old_app else "none"
+
+    app_record = set_status(apps, key, status)
+    if resume:
+        app_record.resume_version = resume
+
+    # 5. Save applications database
+    try:
+        save_applications(apps, apps_path)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to save applications to '{apps_path}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 6. Display success output
+    console.print(
+        f"[green]✓ Successfully updated application for [bold cyan]{co.name}[/bold cyan][/green]\n"
+        f"  [bold]Company key:[/bold] {key}\n"
+        f"  [bold]Status transition:[/bold] {old_status} -> {status}\n"
+    )
+    if resume:
+        console.print(f"  [bold]Resume version set to:[/bold] '{resume}'\n")
+    console.print(f"  [dim]Applications file updated:[/dim] {apps_path}\n")
 
 
 
