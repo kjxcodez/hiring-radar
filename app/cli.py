@@ -1791,6 +1791,139 @@ def note_cli(
         console.print()
 
 
+# ---------------------------------------------------------------------------
+# 21. followups
+# ---------------------------------------------------------------------------
+
+@app.command(name="followups")
+def followups(
+    days: Annotated[
+        int,
+        typer.Option(
+            "--days",
+            help="Number of days since last contact to trigger follow-up warning.",
+        ),
+    ] = 7,
+    send: Annotated[
+        bool,
+        typer.Option(
+            "--send/--no-send",
+            help="Post a formatted 'Follow-ups due' digest to Telegram if configured.",
+        ),
+    ] = False,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON companies database. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    apps_path: Annotated[
+        Path,
+        typer.Option(
+            "--apps-path",
+            help="Path to the JSON applications database. Default: output/applications.json.",
+        ),
+    ] = settings.output_dir / "applications.json",
+) -> None:
+    """Surface applications that need a follow-up based on last contact date."""
+    from rich.table import Table
+    from datetime import date
+
+    # 1. Load companies mapping for names
+    if not input.exists():
+        console.print(
+            f"[red]Error: Input file '{input}' not found.[/red]\n"
+            "What to do next: Run 'hiring-radar discover' first."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        all_companies: list[Company] = [
+            Company.model_validate(c)
+            for c in orjson.loads(input.read_bytes())
+        ]
+        co_map = {c.dedupe_key(): c.name for c in all_companies}
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error: Failed to read database from '{input}': {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # 2. Load applications
+    apps = load_applications(apps_path)
+    if not apps:
+        console.print("[yellow]No applications tracked yet. Use 'jobs apply <company>' to track applications.[/yellow]\n")
+        return
+
+    # 3. Identify follow-up candidates
+    today = date.today()
+    candidates = []
+    for key, app in apps.items():
+        if app.status not in ("applied", "interviewing"):
+            continue
+        if not app.last_contact_date:
+            continue
+
+        days_since = (today - app.last_contact_date).days
+        if days_since >= days:
+            candidates.append({
+                "key": key,
+                "name": co_map.get(key, key),
+                "status": app.status,
+                "days_since": days_since,
+                "applied_date": app.applied_date,
+            })
+
+    # Sort: most overdue first
+    candidates.sort(key=lambda x: x["days_since"], reverse=True)
+
+    # 4. Render Table
+    if not candidates:
+        console.print(f"\n[green]✓ All caught up! No applications are overdue for follow-up (threshold: {days} days).[/green]\n")
+    else:
+        table = Table(title="Applications Needing Follow-up", show_header=True, header_style="bold red")
+        table.add_column("Company Name", style="bold cyan")
+        table.add_column("Status", style="bold white")
+        table.add_column("Days Since Contact", justify="right", style="bold yellow")
+        table.add_column("Applied Date", style="dim white")
+
+        for cand in candidates:
+            applied_str = cand["applied_date"].isoformat() if cand["applied_date"] else "—"
+            table.add_row(
+                cand["name"],
+                cand["status"],
+                str(cand["days_since"]),
+                applied_str,
+            )
+
+        console.print()
+        console.print(table)
+        console.print()
+
+    # 5. Optional Telegram send
+    if send and candidates:
+        digest_lines = ["*Follow-ups Due Digest*"]
+        for cand in candidates:
+            applied_str = cand["applied_date"].isoformat() if cand["applied_date"] else "—"
+            digest_lines.append(
+                f"• *{cand['name']}*: Overdue by {cand['days_since']} days "
+                f"(Status: {cand['status']}, Applied: {applied_str})"
+            )
+        text_content = "\n".join(digest_lines)
+
+        try:
+            from app.notify import send_telegram_message
+            if settings.telegram_bot_token and settings.telegram_chat_id:
+                send_telegram_message(text_content)
+                console.print("[green]✓ Sent follow-up digest to Telegram.[/green]\n")
+            else:
+                console.print("[yellow]Telegram notification not configured. Skipping notification.[/yellow]\n")
+        except ImportError:
+            console.print("[yellow]Telegram notification module not available (ImportError). Skipping notification.[/yellow]\n")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Error sending Telegram notification: {exc}[/red]\n")
+
+
+
 
 
 # ---------------------------------------------------------------------------
