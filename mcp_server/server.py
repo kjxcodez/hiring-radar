@@ -159,6 +159,102 @@ def get_templates_resource() -> list[str]:
         return ["ImportError: outreach templates module or list_templates is not available yet."]
 
 
+# ---------------------------------------------------------------------------
+# MCP Prompts
+# ---------------------------------------------------------------------------
+
+@app.prompt(description="Generate the cold outreach email prompt for a company.")
+def cold_email(company_name: str, template: str = "startup") -> str:
+    """Construct prompt text for generating a cold outreach email to a target company."""
+    try:
+        from app.models import Company
+        companies_file = settings.output_dir / "companies.json"
+        if not companies_file.exists():
+            return f"Error: companies database file '{companies_file}' does not exist."
+
+        all_companies = [
+            Company.model_validate(c)
+            for c in orjson.loads(companies_file.read_bytes())
+        ]
+        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+        if not matches:
+            return f"Error: Company '{company_name}' not found in the database."
+        co = matches[0]
+
+        from app.outreach.email import build_email_system_prompt, build_email_prompt
+        system = build_email_system_prompt()
+        user = build_email_prompt(co)
+        return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}\n\nTemplate requested: {template}"
+    except ImportError:
+        return f"Error: Outreach email module is not available in this build. Requested company: {company_name}, template: {template}"
+    except Exception as exc:  # noqa: BLE001
+        return f"Error building cold email prompt: {exc}"
+
+
+@app.prompt(description="Generate the company research prompt to extract products, stack, and growth signals.")
+def company_research(company_name: str) -> str:
+    """Construct prompt text for performing deeper research on a target company."""
+    try:
+        from app.models import Company
+        companies_file = settings.output_dir / "companies.json"
+        if not companies_file.exists():
+            return f"Error: companies database file '{companies_file}' does not exist."
+
+        all_companies = [
+            Company.model_validate(c)
+            for c in orjson.loads(companies_file.read_bytes())
+        ]
+        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+        if not matches:
+            return f"Error: Company '{company_name}' not found in the database."
+        co = matches[0]
+
+        from app.enrich.research import build_system_prompt, build_research_prompt
+        system = build_system_prompt()
+        user = build_research_prompt(co, [])
+        return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}"
+    except ImportError:
+        return f"Error: Company research module is not available in this build. Requested company: {company_name}"
+    except Exception as exc:  # noqa: BLE001
+        return f"Error building company research prompt: {exc}"
+
+
+@app.prompt(description="Generate the resume matching compatibility prompt for a company.")
+def resume_match(company_name: str) -> str:
+    """Construct prompt text for evaluating how well a candidate's resume fits a target company."""
+    try:
+        from app.models import Company
+        companies_file = settings.output_dir / "companies.json"
+        if not companies_file.exists():
+            return f"Error: companies database file '{companies_file}' does not exist."
+
+        all_companies = [
+            Company.model_validate(c)
+            for c in orjson.loads(companies_file.read_bytes())
+        ]
+        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+        if not matches:
+            return f"Error: Company '{company_name}' not found in the database."
+        co = matches[0]
+
+        from app.resume.parser import load_resume_text
+        if not settings.resume_path:
+            return "Error: No resume path configured. Please configure RESUME_PATH in settings or environment."
+        try:
+            resume_text = load_resume_text(settings.resume_path)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: Failed to load resume from {settings.resume_path}: {exc}"
+
+        from app.resume.score import build_system_prompt, build_scoring_prompt
+        system = build_system_prompt()
+        user = build_scoring_prompt(co, resume_text)
+        return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}"
+    except ImportError:
+        return f"Error: Resume scoring module is not available in this build. Requested company: {company_name}"
+    except Exception as exc:  # noqa: BLE001
+        return f"Error building resume match prompt: {exc}"
+
+
 # 5. Server entrypoint
 def main() -> None:
     """Run the MCP server over stdio transport."""
