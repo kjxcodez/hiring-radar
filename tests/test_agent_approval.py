@@ -100,10 +100,8 @@ class TestAgentApproval(unittest.TestCase):
         mock_tool_fn = MagicMock()
         mock_tool_fn.return_value = {"status": "success"}
 
-        with patch.dict(TOOL_REGISTRY, {"apply_to_company": TOOL_REGISTRY["apply_to_company"]}):
-            # Set a mock function as the tool implementation
-            TOOL_REGISTRY["apply_to_company"].fn = mock_tool_fn
-
+        # Patch the inner function dynamically to avoid global pollution
+        with patch.object(TOOL_REGISTRY["apply_to_company"], "fn", mock_tool_fn):
             res = execute_approved_tool("apply_to_company", {"company_name": "Wayne Enterprises"})
             self.assertEqual(res, {"status": "success"})
             mock_tool_fn.assert_called_once_with(company_name="Wayne Enterprises")
