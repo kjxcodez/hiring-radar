@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from app.config import settings
+from app.config import settings, yaml_config
 from app.discover import SOURCE_REGISTRY
 from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
@@ -2730,6 +2730,38 @@ def outreach_digest(
     console.print()
     console.print(panel)
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# 13.5 morning-brief
+# ---------------------------------------------------------------------------
+
+@app.command(name="morning-brief")
+def morning_brief(
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+) -> None:
+    """Generate a daily cold outreach hiring digest and send it to Telegram.
+
+    Identical to `jobs digest --send`.
+    """
+    bot_token = settings.telegram_bot_token
+    chat_id = yaml_config.telegram.chat_id
+    enabled = yaml_config.telegram.enabled
+
+    if not bot_token or not chat_id or not enabled:
+        console.print(
+            "Telegram notifications are not fully configured or are disabled. "
+            "Skipping morning brief execution."
+        )
+        raise typer.Exit(code=0)
+
+    outreach_digest(input=input, send=True)
 
 
 # ---------------------------------------------------------------------------
