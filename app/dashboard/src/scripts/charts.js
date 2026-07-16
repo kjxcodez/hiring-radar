@@ -67,8 +67,8 @@ function initCharts() {
       datasets: [{
         label: 'Jobs Count',
         data: Object.values(sourceJobs),
-        backgroundColor: 'rgba(0, 229, 255, 0.65)',
-        borderColor: 'rgba(0, 229, 255, 1)',
+        backgroundColor: 'rgba(79, 70, 229, 0.65)',
+        borderColor: 'rgba(79, 70, 229, 1)',
         borderWidth: 1.5,
         barThickness: 20
       }]
@@ -81,12 +81,12 @@ function initCharts() {
       },
       scales: {
         y: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#708090', font: { family: 'JetBrains Mono', size: 9 }, precision: 0 }
+          grid: { color: '#f1f5f9' },
+          ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 9 }, precision: 0 }
         },
         x: {
           grid: { display: false },
-          ticks: { color: '#708090', font: { family: 'JetBrains Mono', size: 9 } }
+          ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 9 } }
         }
       }
     }
@@ -100,13 +100,13 @@ function initCharts() {
       datasets: [{
         data: Object.values(countryJobs),
         backgroundColor: [
-          'rgba(0, 229, 255, 0.65)',
-          'rgba(255, 159, 10, 0.65)',
+          'rgba(79, 70, 229, 0.65)',
+          'rgba(245, 158, 11, 0.65)',
           'rgba(142, 84, 233, 0.65)',
-          'rgba(48, 209, 88, 0.65)',
-          'rgba(112, 128, 144, 0.65)'
+          'rgba(16, 185, 129, 0.65)',
+          'rgba(100, 116, 139, 0.65)'
         ],
-        borderColor: '#101520',
+        borderColor: '#ffffff',
         borderWidth: 2
       }]
     },
@@ -116,11 +116,11 @@ function initCharts() {
       plugins: {
         legend: {
           position: 'right',
-          labels: { color: '#708090', font: { family: 'JetBrains Mono', size: 9 } }
-            }
-          }
+          labels: { color: '#64748b', font: { family: 'JetBrains Mono', size: 9 } }
         }
-      });
+      }
+    }
+  });
 
   // --- Chart 3: Discoveries Timeline line chart ---
   new Chart(document.getElementById("chart-timeline"), {
@@ -131,11 +131,11 @@ function initCharts() {
         label: 'Companies Discovered',
         data: timelineValues,
         fill: true,
-        backgroundColor: 'rgba(0, 229, 255, 0.08)',
-        borderColor: 'rgba(0, 229, 255, 1)',
+        backgroundColor: 'rgba(79, 70, 229, 0.05)',
+        borderColor: 'rgba(79, 70, 229, 1)',
         tension: 0.35,
         borderWidth: 2.5,
-        pointBackgroundColor: 'rgba(0, 229, 255, 1)',
+        pointBackgroundColor: 'rgba(79, 70, 229, 1)',
         pointRadius: 3
       }]
     },
@@ -147,12 +147,12 @@ function initCharts() {
       },
       scales: {
         y: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#708090', font: { family: 'JetBrains Mono', size: 9 }, precision: 0 }
+          grid: { color: '#f1f5f9' },
+          ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 9 }, precision: 0 }
         },
         x: {
           grid: { display: false },
-          ticks: { color: '#708090', font: { family: 'JetBrains Mono', size: 9 } }
+          ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 9 } }
         }
       }
     }

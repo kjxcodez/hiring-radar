@@ -2,6 +2,7 @@ body {
   background-color: var(--color-bg);
   color: var(--color-primary);
   font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
 }
 
 .font-display {
@@ -16,8 +17,26 @@ body {
   border-color: var(--color-border);
 }
 
-/* Keyboard focus states */
+/* Form input focus outline rings */
 input:focus, select:focus, button:focus {
-  outline: 2px solid var(--color-accent) !important;
-  outline-offset: 1px !important;
+  outline: none !important;
+  border-color: var(--color-accent) !important;
+  ring-width: 2px !important;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15) !important;
+}
+
+/* Scrollbar customizations */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

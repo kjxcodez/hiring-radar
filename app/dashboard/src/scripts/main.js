@@ -8,6 +8,13 @@ document.addEventListener("DOMContentLoaded", () => {
   emailCheck = document.getElementById("email-check");
   aiCheck = document.getElementById("ai-check");
 
+  // Pagination selectors
+  pageSizeSelect = document.getElementById("page-size-select");
+  prevPageBtn = document.getElementById("prev-page-btn");
+  nextPageBtn = document.getElementById("next-page-btn");
+  currentPageNum = document.getElementById("current-page-num");
+  totalPagesNum = document.getElementById("total-pages-num");
+
   document.getElementById("generated-timestamp").textContent = new Date().toLocaleString();
   
   if (typeof COMPANIES === 'undefined' || !COMPANIES) {
@@ -15,7 +22,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  // Collapsible Analytics HUD implementation
+  // Collapsible Analytics implementation
   const toggleBtn = document.getElementById("toggle-hud-btn");
   const hudContainer = document.getElementById("analytics-hud");
   const toggleIcon = document.getElementById("toggle-hud-icon");
@@ -52,7 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("stat-total-jobs").textContent = totalJobs;
   document.getElementById("stat-enriched-ai").textContent = `${enrichedCount} / ${totalCompanies}`;
 
-  // Dynamically populate Source drop list
+  // Dynamically populate Source dropdown select list
   const sourcesSet = new Set();
   COMPANIES.forEach(c => {
     const src = c.ats_platform || (c.jobs && c.jobs[0] ? c.jobs[0].source : "feed");
@@ -65,11 +72,17 @@ document.addEventListener("DOMContentLoaded", () => {
     sourceSelect.appendChild(opt);
   });
 
+  // Bind filter events
   searchInput.addEventListener("input", applyFilters);
   sourceSelect.addEventListener("change", applyFilters);
   remoteCheck.addEventListener("change", applyFilters);
   emailCheck.addEventListener("change", applyFilters);
   aiCheck.addEventListener("change", applyFilters);
+
+  // Bind pagination events
+  pageSizeSelect.addEventListener("change", (e) => changePageSize(e.target.value));
+  prevPageBtn.addEventListener("click", prevPage);
+  nextPageBtn.addEventListener("click", nextPage);
 
   // Start initial states
   applyFilters();

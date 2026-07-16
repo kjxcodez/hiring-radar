@@ -1,28 +1,25 @@
 <div id="analytics-hud" class="space-y-6">
   ## include components/stat_cards.html
 
-  <!-- Charts HUD -->
+  <!-- Charts Panel -->
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <div class="bg-[#101520] border border-[#1e2638] rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
-      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-3">Jobs by Source / Platform</h4>
+    <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between h-[320px]">
+      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-wider mb-3">Jobs by Source / Platform</h4>
       <div class="flex-1 min-h-0 relative">
         <canvas id="chart-source"></canvas>
       </div>
     </div>
-    <div class="bg-[#101520] border border-[#1e2638] rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
-      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-3">Jobs by Country (Heuristic)</h4>
-      <div class="flex-1 min-h-0 relative flex justify-center items-center">
+    <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between h-[320px]">
+      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-wider mb-3">Jobs by Country (Heuristic)</h4>
+      <div class="flex-1 min-h-0 relative flex justify-center items-center font-mono">
         <canvas id="chart-country" class="max-h-[220px] max-w-[220px]"></canvas>
       </div>
     </div>
-    <div class="bg-[#101520] border border-[#1e2638] rounded-xl p-5 shadow-lg flex flex-col justify-between h-[320px]">
-      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-widest mb-3">Discoveries (Last 14 Days)</h4>
+    <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between h-[320px]">
+      <h4 class="text-xs font-bold font-mono text-slate-400 uppercase tracking-wider mb-3">Discoveries (Last 14 Days)</h4>
       <div class="flex-1 min-h-0 relative">
         <canvas id="chart-timeline"></canvas>
       </div>
     </div>
-  </div>
-  <div class="text-[10px] font-mono text-slate-500 italic">
-    * Charts reflect total local data state, independent of filters applied below.
   </div>
 </div>

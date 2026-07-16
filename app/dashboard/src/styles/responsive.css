@@ -1,4 +1,4 @@
-/* prefers-reduced-motion */
+/* prefers-reduced-motion styling overrides */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-delay: 0s !important;
