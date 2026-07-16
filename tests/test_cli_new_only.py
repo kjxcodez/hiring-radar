@@ -36,8 +36,11 @@ class TestCliNewOnly(unittest.TestCase):
         self.output_dir_patcher.stop()
 
     @patch("app.cli.console")
+    @patch("app.cli.load_seed_slugs")
     @patch("app.cli.SOURCE_REGISTRY")
-    def test_run_discovery_new_only(self, mock_registry, mock_console):
+    def test_run_discovery_new_only(self, mock_registry, mock_load_seeds, mock_console):
+        mock_load_seeds.return_value = {"greenhouse": ["some-slug"]}
+        
         now_str = datetime.utcnow().isoformat()
         # Create an existing company on disk
         existing_co = Company(
@@ -70,7 +73,7 @@ class TestCliNewOnly(unittest.TestCase):
                     job_title="ML Engineer",
                     job_url="https://new.com/job1",
                     location="USA",
-                    remote_type="office",
+                    remote_type="onsite",
                     source="greenhouse",
                 )
             ]
@@ -108,8 +111,10 @@ class TestCliNewOnly(unittest.TestCase):
         self.assertIn("Brand New Corp", names)
 
     @patch("app.cli.console")
+    @patch("app.cli.load_seed_slugs")
     @patch("app.cli.SOURCE_REGISTRY")
-    def test_run_discovery_full_reporting(self, mock_registry, mock_console):
+    def test_run_discovery_full_reporting(self, mock_registry, mock_load_seeds, mock_console):
+        mock_load_seeds.return_value = {"greenhouse": ["some-slug"]}
         mock_registry.__contains__.return_value = True
         mock_registry.__getitem__.return_value = MagicMock(return_value=[])
 
