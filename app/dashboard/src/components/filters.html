@@ -1,0 +1,47 @@
+<div class="bg-[#101520] border border-[#1e2638] rounded-xl p-5 shadow-md space-y-4">
+  <div class="text-xs font-bold font-mono text-[#00e5ff] uppercase tracking-widest flex items-center space-x-2">
+    <span class="inline-block h-2 w-2 rounded-full bg-[#00e5ff] animate-ping"></span>
+    <span>Detection Filters</span>
+  </div>
+  
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+    <!-- Search Input -->
+    <div class="lg:col-span-2">
+      <label for="search-input" class="block text-[10px] font-bold font-mono text-slate-400 uppercase tracking-widest mb-2">Search Companies</label>
+      <input type="text" id="search-input" placeholder="Type target name..." class="w-full bg-[#070b10] border border-[#1e2638] rounded px-3 py-2 text-sm text-slate-100 placeholder-slate-650 focus:outline-none transition-colors">
+    </div>
+    <!-- Source select -->
+    <div>
+      <label for="source-select" class="block text-[10px] font-bold font-mono text-slate-400 uppercase tracking-widest mb-2">Source / ATS</label>
+      <select id="source-select" class="w-full bg-[#070b10] border border-[#1e2638] rounded px-3 py-2 text-sm text-slate-100 focus:outline-none transition-colors font-mono">
+        <option value="all">All Sources</option>
+      </select>
+    </div>
+    <!-- Checkboxes -->
+    <div class="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <label class="flex items-center space-x-2 text-xs font-mono text-slate-350 cursor-pointer select-none py-2 hover:text-[#00e5ff]">
+        <input type="checkbox" id="remote-check" class="rounded border-[#1e2638] bg-[#070b10] text-[#00e5ff] focus:ring-0">
+        <span>Remote Only</span>
+      </label>
+      <label class="flex items-center space-x-2 text-xs font-mono text-slate-350 cursor-pointer select-none py-2 hover:text-[#00e5ff]">
+        <input type="checkbox" id="email-check" class="rounded border-[#1e2638] bg-[#070b10] text-[#00e5ff] focus:ring-0">
+        <span>Has Email</span>
+      </label>
+      <label class="flex items-center space-x-2 text-xs font-mono text-slate-350 cursor-pointer select-none py-2 hover:text-[#00e5ff]">
+        <input type="checkbox" id="ai-check" class="rounded border-[#1e2638] bg-[#070b10] text-[#00e5ff] focus:ring-0">
+        <span>Has AI Summary</span>
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- Results Counter -->
+<div class="text-xs font-mono text-slate-400 flex items-center justify-between px-1">
+  <div>
+    Showing <span class="text-[#00e5ff] font-bold" id="count-visible">0</span> of <span class="text-slate-200 font-bold" id="count-total">0</span> target profiles
+  </div>
+  <div class="flex items-center space-x-3 text-[10px] text-slate-500">
+    <span class="flex items-center space-x-1"><span class="h-2 w-2 rounded-full bg-[#30d158]"></span><span>READY</span></span>
+    <span class="flex items-center space-x-1"><span class="h-2 w-2 rounded-full bg-[#ff9f0a] pulse-amber"></span><span>ACTION REQUIRED</span></span>
+  </div>
+</div>

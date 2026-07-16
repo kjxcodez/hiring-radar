@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📡 Hiring Radar HUD</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    ## include styles/tokens.css
+    ## include styles/base.css
+    ## include styles/layout.css
+    ## include styles/components.css
+    ## include styles/charts.css
+    ## include styles/modal.css
+    ## include styles/responsive.css
+  </style>
+</head>
+<body class="h-full flex flex-col bg-[#0a0e14]">
+  ## include components/header.html
+
+  <!-- Main HUD Panel -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    ## include components/chart_panels.html
+    ## include components/filters.html
+    ## include components/table.html
+    ## include components/pagination.html
+  </main>
+
+  ## include components/row_detail_modal.html
+
+  <!-- Embed data -->
+  <script>
+    const COMPANIES = __COMPANIES_JSON_PLACEHOLDER__;
+  </script>
+
+  <script>
+    ## include scripts/state.js
+    ## include scripts/filters.js
+    ## include scripts/charts.js
+    ## include scripts/modal.js
+    ## include scripts/main.js
+  </script>
+</body>
+</html>

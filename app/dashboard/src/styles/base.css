@@ -1,0 +1,23 @@
+body {
+  background-color: var(--color-bg);
+  color: var(--color-primary);
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.border-hud {
+  border-color: var(--color-border);
+}
+
+/* Keyboard focus states */
+input:focus, select:focus, button:focus {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: 1px !important;
+}

@@ -1,0 +1,71 @@
+<div id="detail-modal" class="hidden fixed inset-0 bg-[#0a0e14]/90 backdrop-blur flex items-center justify-center p-4 z-50">
+  <div class="bg-[#101520] border border-[#1e2638] rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden transition-all duration-350">
+    <!-- Modal Header -->
+    <div class="border-b border-[#1e2638] p-6 flex justify-between items-start bg-[#0c1017]">
+      <div>
+        <h2 id="modal-company-name" class="text-2xl font-bold font-display tracking-wide text-slate-100"></h2>
+        <div id="modal-company-links" class="flex flex-wrap gap-2 mt-3 font-mono"></div>
+      </div>
+      <button onclick="closeModal()" class="text-slate-400 hover:text-[#00e5ff] transition-colors p-1.5 rounded border border-[#1e2638] bg-[#101520]" aria-label="Close modal">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- Modal Body -->
+    <div class="flex-1 overflow-y-auto p-6 space-y-6">
+      <!-- AI Enrichment Section -->
+      <div class="space-y-3">
+        <h3 class="text-sm font-bold font-mono text-[#00e5ff] uppercase tracking-widest flex items-center space-x-2">
+          <span>✨</span> <span>AI Enrichment Profile</span>
+        </h3>
+        <div id="modal-ai-enrichment"></div>
+      </div>
+
+      <!-- Contacts Section -->
+      <div class="space-y-3">
+        <h3 class="text-sm font-bold font-mono text-[#00e5ff] uppercase tracking-widest flex items-center space-x-2">
+          <span>📧</span> <span>Outreach Contacts</span>
+        </h3>
+        <div id="modal-contacts"></div>
+      </div>
+
+      <!-- Jobs List Section -->
+      <div class="space-y-3">
+        <h3 class="text-sm font-bold font-mono text-[#00e5ff] uppercase tracking-widest flex items-center space-x-2">
+          <span>💼</span> <span>Active Openings</span>
+        </h3>
+        <div class="border border-[#1e2638] rounded overflow-hidden bg-[#0c1017]">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-[#0c1017] border-b border-[#1e2638] text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">
+                  <th class="py-3 px-4">Title</th>
+                  <th class="py-3 px-4">Location</th>
+                  <th class="py-3 px-4 text-center">Remote</th>
+                  <th class="py-3 px-4 text-right">Post</th>
+                </tr>
+              </thead>
+              <tbody id="modal-jobs-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Operational Notes Section -->
+      <div id="modal-notes-section" class="hidden space-y-3">
+        <h3 class="text-sm font-bold font-mono text-[#00e5ff] uppercase tracking-widest flex items-center space-x-2">
+          <span>📝</span> <span>System Scrape Logs</span>
+        </h3>
+        <div class="bg-[#0c1017] border border-[#1e2638] rounded p-4">
+          <ul id="modal-notes-list" class="list-disc list-inside space-y-1.5 text-sm font-mono text-slate-350">
+            <!-- Dynamically populated -->
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

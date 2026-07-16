@@ -1,0 +1,12 @@
+/* Pulse Alert states */
+@keyframes status-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.pulse-amber {
+  animation: status-pulse 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+#toggle-hud-icon {
+  transition: transform 0.2s ease-in-out;
+}
