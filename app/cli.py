@@ -2765,6 +2765,176 @@ def morning_brief(
 
 
 # ---------------------------------------------------------------------------
+# 13.6 report
+# ---------------------------------------------------------------------------
+
+@app.command(name="report")
+def activity_report(
+    days: Annotated[
+        int,
+        typer.Option(
+            "--days",
+            help="Number of days in the reporting window.",
+        ),
+    ] = 1,
+    send: Annotated[
+        bool,
+        typer.Option(
+            "--send/--no-send",
+            help="Post the generated report to Telegram via the bot. Default: False.",
+        ),
+    ] = False,
+    input: Annotated[
+        Path,
+        typer.Option(
+            "--input",
+            help="Path to the JSON database/source file. Default: output/companies.json.",
+        ),
+    ] = settings.output_dir / "companies.json",
+    apps_path: Annotated[
+        Path,
+        typer.Option(
+            "--apps-path",
+            help="Path to the JSON applications database. Default: output/applications.json.",
+        ),
+    ] = settings.output_dir / "applications.json",
+) -> None:
+    """Generate an end-of-day summary of user activity over a reporting window.
+
+    Future polish (e.g. weekly/monthly rollups) can build on this same pattern later if wanted.
+    """
+    import re
+    from rich.panel import Panel
+
+    # Calculate date window boundaries
+    window_start = datetime.now() - timedelta(days=days)
+    window_start_date = window_start.date()
+
+    # 1. Gather stats from companies.json
+    new_companies_count = 0
+    new_jobs_count = 0
+    emails_sent_count = 0
+
+    if input.exists():
+        try:
+            raw_companies = orjson.loads(input.read_bytes())
+            for c_dict in raw_companies:
+                # New companies discovered
+                disc_at_str = c_dict.get("discovered_at")
+                if disc_at_str:
+                    try:
+                        disc_dt = datetime.fromisoformat(disc_at_str)
+                        c_time = disc_dt.replace(tzinfo=None) if disc_dt.tzinfo else disc_dt
+                        if c_time >= window_start:
+                            new_companies_count += 1
+                            jobs_list = c_dict.get("jobs", [])
+                            new_jobs_count += len(jobs_list)
+                    except Exception:
+                        pass
+
+                # Emails drafted/sent
+                notes = c_dict.get("notes", [])
+                if isinstance(notes, list):
+                    for note in notes:
+                        if isinstance(note, str) and note.startswith("email_sent:"):
+                            match = re.search(r"email_sent:\s*([\d\-]+)", note)
+                            if match:
+                                try:
+                                    note_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+                                    if note_date >= window_start_date:
+                                        emails_sent_count += 1
+                                except Exception:
+                                    pass
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Warning: Could not fully parse companies database: {exc}[/yellow]")
+
+    # 2. Gather stats from applications.json
+    applications_count = 0
+    pending_followups_count = None
+
+    if apps_path.exists():
+        try:
+            raw_apps = orjson.loads(apps_path.read_bytes())
+            if isinstance(raw_apps, dict):
+                for app_key, app_dict in raw_apps.items():
+                    history = app_dict.get("status_history", [])
+                    if isinstance(history, list):
+                        for hist_item in history:
+                            if isinstance(hist_item, dict) and hist_item.get("status") == "applied":
+                                hist_date_str = hist_item.get("date")
+                                if hist_date_str:
+                                    try:
+                                        hist_date = datetime.strptime(hist_date_str, "%Y-%m-%d").date()
+                                        if hist_date >= window_start_date:
+                                            applications_count += 1
+                                    except Exception:
+                                        pass
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Warning: Could not fully parse applications database: {exc}[/yellow]")
+
+        # 3. Follow-ups still pending (dependent on tracker module existence/imports)
+        try:
+            from app.tracker.status import load_applications
+            apps_data = load_applications(apps_path)
+            today = date.today()
+            pending_followups_count = 0
+            for key, app_obj in apps_data.items():
+                if app_obj.status not in ("applied", "interviewing"):
+                    continue
+                if not app_obj.last_contact_date:
+                    continue
+                days_since = (today - app_obj.last_contact_date).days
+                if days_since >= 7:  # default threshold
+                    pending_followups_count += 1
+        except Exception:
+            # Handle gracefully if tracker/models/dependencies are missing or raise exceptions
+            pending_followups_count = None
+
+    # 4. Format report text
+    report_lines = [
+        f"📊 *Activity Report (Last {days} Days)*\n",
+        f"· New companies discovered: {new_companies_count}",
+        f"· New jobs added: {new_jobs_count}",
+        f"· Emails drafted/sent: {emails_sent_count}",
+        f"· Applications submitted: {applications_count}",
+    ]
+    if pending_followups_count is not None:
+        report_lines.append(f"· Follow-ups pending: {pending_followups_count}")
+
+    report_text = "\n".join(report_lines)
+
+    # 5. Optional Telegram send
+    if send:
+        bot_token = settings.telegram_bot_token
+        chat_id = yaml_config.telegram.chat_id
+        enabled = yaml_config.telegram.enabled
+
+        if not bot_token or not chat_id or not enabled:
+            console.print(
+                "Telegram notifications are not fully configured or are disabled. "
+                "Skipping report send."
+            )
+        else:
+            console.print("Posting activity report to Telegram…")
+            success = send_telegram_message(report_text)
+            if success:
+                console.print("[bold green]✓ Activity report posted successfully to Telegram![/bold green]")
+            else:
+                console.print("[bold red]✗ Failed to post activity report to Telegram.[/bold red]")
+
+    # Either way, print to console in a nice Panel
+    panel = Panel(
+        report_text,
+        title="[bold magenta]Activity Report[/bold magenta]",
+        expand=False,
+        border_style="cyan"
+    )
+    console.print()
+    console.print(panel)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # 14. dashboard
 # ---------------------------------------------------------------------------
 
