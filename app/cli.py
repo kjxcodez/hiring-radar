@@ -142,6 +142,13 @@ def discover(
             help="Filter jobs posted within this many days. Default: None.",
         ),
     ] = None,
+    new_only: Annotated[
+        bool,
+        typer.Option(
+            "--new-only",
+            help="Report only new companies found in this run.",
+        ),
+    ] = False,
 ) -> None:
     """Collect hiring companies from public ATS APIs and job boards."""
     _run_discovery(
@@ -154,6 +161,7 @@ def discover(
         keyword=keyword,
         exclude=exclude,
         days=days,
+        new_only=new_only,
     )
 
 
@@ -167,7 +175,8 @@ def _run_discovery(
     keyword: Optional[str],
     exclude: Optional[str],
     days: Optional[int],
-) -> None:
+    new_only: bool = False,
+) -> dict[str, Any]:
     # --- Load Search Profile if provided ---
     loaded_prof = None
     if profile:
@@ -259,6 +268,8 @@ def _run_discovery(
 
     # --- Deduplicate and merge ---
     merged: dict[str, Company] = {c.dedupe_key(): c for c in existing}
+    pre_existing_keys = set(merged.keys())
+
     for new_co in all_new:
         key = new_co.dedupe_key()
         if key in merged:
@@ -295,18 +306,45 @@ def _run_discovery(
         console.print(f"[red]Failed to write {companies_file}: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
+    # --- Track new vs pre-existing in written results ---
+    new_companies_written = [c for c in final if c.dedupe_key() not in pre_existing_keys]
+    unchanged_count = len(final) - len(new_companies_written)
+    total_new_jobs = sum(len(c.jobs) for c in new_companies_written)
+
     # --- Summary ---
     console.print()
-    table = Table(title="discover — results", show_header=True)
-    table.add_column("Metric", style="bold cyan", no_wrap=True)
-    table.add_column("Value", justify="right", style="bold white")
-    table.add_row("Sources queried", str(len(source_list)))
-    table.add_row("New companies found", str(len(all_new)))
-    table.add_row("Companies before filters", str(before_filter_count))
-    table.add_row("Total companies written", str(len(final)))
-    table.add_row("Total job listings", str(total_jobs))
-    console.print(table)
+    if new_only:
+        table = Table(title="discover — results (new only)", show_header=True)
+        table.add_column("Metric", style="bold cyan", no_wrap=True)
+        table.add_column("Value", justify="right", style="bold white")
+        table.add_row("Sources queried", str(len(source_list)))
+        table.add_row("New companies written", f"{len(new_companies_written)} new ({unchanged_count} total unchanged, not shown)")
+        table.add_row("New job listings", str(total_new_jobs))
+        console.print(table)
+    else:
+        table = Table(title="discover — results", show_header=True)
+        table.add_column("Metric", style="bold cyan", no_wrap=True)
+        table.add_column("Value", justify="right", style="bold white")
+        table.add_row("Sources queried", str(len(source_list)))
+        table.add_row("New companies found", str(len(all_new)))
+        table.add_row("Companies before filters", str(before_filter_count))
+        table.add_row("Total companies written", str(len(final)))
+        table.add_row("Total job listings", str(total_jobs))
+        console.print(table)
+
     console.print(f"\n  [dim]Output:[/dim] {companies_file}\n")
+
+    summary_data = {
+        "sources_queried": len(source_list),
+        "new_companies_found": len(all_new),
+        "companies_before_filters": before_filter_count,
+        "total_companies_written": len(final),
+        "total_jobs": total_jobs,
+        "new_companies_written": len(new_companies_written),
+        "unchanged_companies_not_shown": unchanged_count,
+        "new_jobs": total_new_jobs,
+    }
+    return summary_data
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +1016,16 @@ def search_save(
 
 
 @search_app.command(name="run")
-def search_run(name: str) -> None:
+def search_run(
+    name: str,
+    new_only: Annotated[
+        bool,
+        typer.Option(
+            "--new-only",
+            help="Report only new companies found in this run.",
+        ),
+    ] = False,
+) -> None:
     """Run a saved search configuration by name."""
     searches = load_saved_searches()
     if name not in searches:
@@ -1001,6 +1048,7 @@ def search_run(name: str) -> None:
         keyword=s.keyword,
         exclude=s.exclude,
         days=s.days,
+        new_only=new_only,
     )
 
 
