@@ -1,5 +1,22 @@
 name: frontend
-keywords: [react, next.js, typescript]
+
+keywords:
+  - react
+  - next.js
+  - typescript
+  - frontend
+  - ui engineer
+
 remote: true
-countries: [usa, canada]
-exclude: [internship, intern, unpaid]
+
+countries:
+  - usa
+  - canada
+  - uk
+  - germany
+
+exclude:
+  - internship
+  - intern
+  - unpaid
+  - wordpress

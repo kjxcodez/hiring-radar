@@ -1,0 +1,13 @@
+name: startup
+
+keywords:
+  - software engineer
+  - founding engineer
+  - founding full stack
+  - founding frontend
+  - startup
+
+remote: true
+
+exclude:
+  - internship

@@ -1,0 +1,15 @@
+name: remote
+
+keywords:
+  - software engineer
+  - full stack
+  - backend
+  - frontend
+
+remote: true
+
+countries:
+  - worldwide
+
+exclude:
+  - onsite
