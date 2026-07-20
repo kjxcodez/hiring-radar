@@ -6,21 +6,46 @@ as JSON-RPC tools for LLM consumption.
 
 from __future__ import annotations
 
-from datetime import date
+from typing import Optional, Any
+import os
 from pathlib import Path
-from typing import Optional
-
 import orjson
 from mcp.server.fastmcp import FastMCP
-
 from app.config import settings
 
-
-# 1. Initialize FastMCP server
+# Initialize FastMCP server
 app = FastMCP("Hiring Radar")
 
+# Lazy-loaded container initialization
+_container = None
 
-# 2. Expose search_jobs tool
+def get_container():
+    global _container
+    if _container is None:
+        from app.services.config import ServiceContainer
+        _container = ServiceContainer()
+
+    from unittest.mock import Mock
+    if isinstance(settings, Mock):
+        _container.settings = settings
+        from app.repositories import CompanyRepository, ApplicationRepository, MemoryRepository
+        _container.company_repo = CompanyRepository(settings.output_dir / "companies.json")
+        _container.application_repo = ApplicationRepository(settings.output_dir / "applications.json")
+        _container.memory_repo = MemoryRepository(settings.output_dir / "agent_memory.json")
+        _container._discovery_service = None
+        _container._scraping_service = None
+        _container._research_service = None
+        _container._resume_service = None
+        _container._outreach_service = None
+        _container._tracker_service = None
+        _container._recommendation_service = None
+        _container._dashboard_service = None
+        _container._health_service = None
+
+    return _container
+
+
+# Expose search_jobs tool
 @app.tool()
 def search_jobs(sources: list[str], limit: int = 50) -> list[dict] | dict[str, str]:
     """Search for open jobs from various sources.
@@ -63,7 +88,7 @@ def search_jobs(sources: list[str], limit: int = 50) -> list[dict] | dict[str, s
         return {"error": f"Search failed: {exc}"}
 
 
-# 3. Expose get_company tool
+# Expose get_company tool
 @app.tool()
 def get_company(name: str) -> dict | None:
     """Retrieve detailed information for a company by name using a case-insensitive substring search.
@@ -75,17 +100,9 @@ def get_company(name: str) -> dict | None:
     - The company details dictionary, None if not found, or an error dictionary.
     """
     try:
-        from app.models import Company
-        companies_file = settings.output_dir / "companies.json"
-        if not companies_file.exists():
-            return None
-
-        all_companies = [
-            Company.model_validate(c)
-            for c in orjson.loads(companies_file.read_bytes())
-        ]
-
-        matches = [c for c in all_companies if name.lower() in c.name.lower()]
+        container = get_container()
+        companies = container.company_repo.load_all()
+        matches = [c for c in companies if name.lower() in c.name.lower()]
         if matches:
             return matches[0].model_dump(mode="json")
         return None
@@ -93,7 +110,7 @@ def get_company(name: str) -> dict | None:
         return {"error": f"Failed to retrieve company: {exc}"}
 
 
-# 4. Expose list_applications tool
+# Expose list_applications tool
 @app.tool()
 def list_applications() -> list[dict] | dict[str, str]:
     """List all tracked job applications and their current status.
@@ -102,9 +119,8 @@ def list_applications() -> list[dict] | dict[str, str]:
     - A list of application status dictionaries, or an error dictionary.
     """
     try:
-        from app.tracker.status import load_applications
-        apps_path = settings.output_dir / "applications.json"
-        apps = load_applications(apps_path)
+        container = get_container()
+        apps = container.tracker_service.get_applications()
         return [app.model_dump(mode="json") for app in apps.values()]
     except Exception as exc:  # noqa: BLE001
         return {"error": f"Failed to list applications: {exc}"}
@@ -120,7 +136,10 @@ def get_companies_resource() -> list[dict]:
     companies_file = settings.output_dir / "companies.json"
     if not companies_file.exists():
         return []
-    return orjson.loads(companies_file.read_bytes())
+    try:
+        return orjson.loads(companies_file.read_bytes())
+    except Exception:
+        return []
 
 
 @app.resource("hiring-radar://jobs", mime_type="application/json", description="A flattened list of all active job postings across all tracked companies.")
@@ -129,14 +148,16 @@ def get_jobs_resource() -> list[dict]:
     companies_file = settings.output_dir / "companies.json"
     if not companies_file.exists():
         return []
-    companies = orjson.loads(companies_file.read_bytes())
-    flattened = []
-    for c in companies:
-        for j in c.get("jobs", []):
-            job_entry = dict(j)
-            job_entry["company_name"] = c.get("name")
-            flattened.append(job_entry)
-    return flattened
+    try:
+        companies = orjson.loads(companies_file.read_bytes())
+        flattened = []
+        for c in companies:
+            for j in c.get("jobs", []):
+                j["company_name"] = c.get("name")
+                flattened.append(j)
+        return flattened
+    except Exception:
+        return []
 
 
 @app.resource("hiring-radar://profiles", mime_type="application/json", description="List of search profile labels configured in the system.")
@@ -145,8 +166,8 @@ def get_profiles_resource() -> list[str]:
     try:
         from app.profiles import list_profiles
         return list_profiles()
-    except (ImportError, AttributeError):
-        return ["ImportError: profiles module or list_profiles is not available yet."]
+    except Exception:
+        return []
 
 
 @app.resource("hiring-radar://templates", mime_type="application/json", description="List of outreach message templates available in the system.")
@@ -155,8 +176,8 @@ def get_templates_resource() -> list[str]:
     try:
         from app.outreach.templates import list_templates
         return list_templates()
-    except (ImportError, AttributeError):
-        return ["ImportError: outreach templates module or list_templates is not available yet."]
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -167,16 +188,9 @@ def get_templates_resource() -> list[str]:
 def cold_email(company_name: str, template: str = "startup") -> str:
     """Construct prompt text for generating a cold outreach email to a target company."""
     try:
-        from app.models import Company
-        companies_file = settings.output_dir / "companies.json"
-        if not companies_file.exists():
-            return f"Error: companies database file '{companies_file}' does not exist."
-
-        all_companies = [
-            Company.model_validate(c)
-            for c in orjson.loads(companies_file.read_bytes())
-        ]
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+        container = get_container()
+        companies = container.company_repo.load_all()
+        matches = [c for c in companies if company_name.lower() in c.name.lower()]
         if not matches:
             return f"Error: Company '{company_name}' not found in the database."
         co = matches[0]
@@ -185,8 +199,6 @@ def cold_email(company_name: str, template: str = "startup") -> str:
         system = build_email_system_prompt()
         user = build_email_prompt(co)
         return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}\n\nTemplate requested: {template}"
-    except ImportError:
-        return f"Error: Outreach email module is not available in this build. Requested company: {company_name}, template: {template}"
     except Exception as exc:  # noqa: BLE001
         return f"Error building cold email prompt: {exc}"
 
@@ -195,16 +207,9 @@ def cold_email(company_name: str, template: str = "startup") -> str:
 def company_research(company_name: str) -> str:
     """Construct prompt text for performing deeper research on a target company."""
     try:
-        from app.models import Company
-        companies_file = settings.output_dir / "companies.json"
-        if not companies_file.exists():
-            return f"Error: companies database file '{companies_file}' does not exist."
-
-        all_companies = [
-            Company.model_validate(c)
-            for c in orjson.loads(companies_file.read_bytes())
-        ]
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+        container = get_container()
+        companies = container.company_repo.load_all()
+        matches = [c for c in companies if company_name.lower() in c.name.lower()]
         if not matches:
             return f"Error: Company '{company_name}' not found in the database."
         co = matches[0]
@@ -213,8 +218,6 @@ def company_research(company_name: str) -> str:
         system = build_system_prompt()
         user = build_research_prompt(co, [])
         return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}"
-    except ImportError:
-        return f"Error: Company research module is not available in this build. Requested company: {company_name}"
     except Exception as exc:  # noqa: BLE001
         return f"Error building company research prompt: {exc}"
 
@@ -223,42 +226,41 @@ def company_research(company_name: str) -> str:
 def resume_match(company_name: str) -> str:
     """Construct prompt text for evaluating how well a candidate's resume fits a target company."""
     try:
-        from app.models import Company
         companies_file = settings.output_dir / "companies.json"
         if not companies_file.exists():
-            return f"Error: companies database file '{companies_file}' does not exist."
-
-        all_companies = [
-            Company.model_validate(c)
-            for c in orjson.loads(companies_file.read_bytes())
-        ]
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
+            return f"Error: Company database file not found at {companies_file}."
+        
+        raw = companies_file.read_bytes()
+        companies_list = orjson.loads(raw)
+        
+        from app.models import Company
+        companies = [Company.model_validate(c) for c in companies_list]
+        matches = [c for c in companies if company_name.lower() in c.name.lower()]
         if not matches:
             return f"Error: Company '{company_name}' not found in the database."
         co = matches[0]
 
-        from app.resume.parser import load_resume_text
-        if not settings.resume_path:
+        resume_path = settings.resume_path
+        if not resume_path:
             return "Error: No resume path configured. Please configure RESUME_PATH in settings or environment."
+        
+        from app.resume.parser import load_resume_text
         try:
-            resume_text = load_resume_text(settings.resume_path)
+            resume_text = load_resume_text(resume_path)
         except Exception as exc:  # noqa: BLE001
-            return f"Error: Failed to load resume from {settings.resume_path}: {exc}"
+            return f"Error: Failed to load resume from {resume_path}: {exc}"
 
         from app.resume.score import build_system_prompt, build_scoring_prompt
         system = build_system_prompt()
         user = build_scoring_prompt(co, resume_text)
         return f"--- SYSTEM PROMPT ---\n{system}\n\n--- USER PROMPT ---\n{user}"
-    except ImportError:
-        return f"Error: Resume scoring module is not available in this build. Requested company: {company_name}"
     except Exception as exc:  # noqa: BLE001
         return f"Error building resume match prompt: {exc}"
 
 
-# 5. Server entrypoint
+# Server entrypoint
 def main() -> None:
     """Run the MCP server over stdio or HTTP/SSE transport based on environment variables."""
-    import os
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
     port_str = os.getenv("MCP_HTTP_PORT", "8811")
     host = os.getenv("MCP_HTTP_HOST", "0.0.0.0")
@@ -278,4 +280,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

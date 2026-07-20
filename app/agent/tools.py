@@ -3,22 +3,47 @@
 from __future__ import annotations
 
 import logging
-import re
-from datetime import date, datetime
-from pathlib import Path
+from datetime import date
 from typing import Any, Callable, Optional
-
-import orjson
 from pydantic import BaseModel
 
-from app.config import settings
 from app.models import Company
-
+from app.config import settings
+from app.tracker.status import load_applications, save_applications
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded container
+_container = None
 
-# 1. Define AgentTool structure
+def get_container():
+    global _container
+    if _container is None:
+        from app.services.config import ServiceContainer
+        _container = ServiceContainer()
+    return _container
+
+
+def _find_company_by_name(name: str, input_path: Optional[Path] = None) -> tuple[Optional[Company], list[str]]:
+    container = get_container()
+    repo = container.company_repo
+    if input_path:
+        from app.repositories.company import CompanyRepository
+        repo = CompanyRepository(input_path)
+    companies = repo.load_all()
+    matches = [c for c in companies if name.lower() in c.name.lower()]
+    if len(matches) == 1:
+        return matches[0], []
+    suggestions = [
+        c.name for c in companies
+        if name.lower() in c.name.lower() or c.name.lower() in name.lower()
+    ]
+    if len(matches) > 1:
+        return None, [m.name for m in matches]
+    return None, suggestions
+
+
+# Define AgentTool structure
 class AgentTool(BaseModel):
     """Container for an AI agent tool specification and callable function."""
 
@@ -35,31 +60,11 @@ class AgentTool(BaseModel):
 TOOL_REGISTRY: dict[str, AgentTool] = {}
 
 
-# Helper for fuzzy matching a company by name
-def _find_company_by_name(name: str, companies_file: Path) -> tuple[Company, list[Company]]:
-    if not companies_file.exists():
-        raise FileNotFoundError(f"Companies database file '{companies_file}' not found.")
-
-    all_companies = [
-        Company.model_validate(c)
-        for c in orjson.loads(companies_file.read_bytes())
-    ]
-
-    matches = [c for c in all_companies if name.lower() in c.name.lower()]
-    if not matches:
-        raise ValueError(f"Company matching '{name}' not found in the database.")
-
-    return matches[0], all_companies
-
-
-# 2. Register tools with try/except guards
-
 # -- TOOL: search_jobs --
 try:
     from mcp_server.server import search_jobs
 
     def _search_jobs_wrapper(sources: list[str], limit: int = 50) -> list[dict] | dict[str, str]:
-        # search_jobs is already protected and returns serializable data
         jobs = search_jobs(sources, limit)
         if isinstance(jobs, dict) and "error" in jobs:
             return jobs
@@ -114,7 +119,6 @@ try:
     from mcp_server.server import get_company
 
     def _get_company_wrapper(name: str) -> dict | None | dict[str, str]:
-        # get_company is already protected and returns serializable data
         return get_company(name)
 
     TOOL_REGISTRY["get_company"] = AgentTool(
@@ -138,27 +142,18 @@ except ImportError as err:
 
 # -- TOOL: score_company_fit --
 try:
-    from app.resume.parser import load_resume_text
-    from app.resume.score import score_company
-    from app.cli import resolve_resume_path
-
     def _score_company_fit_wrapper(company_name: str, resume_path: Optional[str] = None) -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            co, _ = _find_company_by_name(company_name, companies_file)
-
-            # Resolve resume path
-            try:
-                resume_p = resolve_resume_path(resume_path)
-            except Exception as e:
-                return {"error": f"Failed to resolve resume path: {e}"}
-
-            if not resume_p or not resume_p.exists():
-                return {"error": f"Resume path '{resume_p}' does not exist."}
-
-            resume_text = load_resume_text(resume_p)
-            result = score_company(co, resume_text)
-            return result
+            container = get_container()
+            res = container.resume_service.score_compatibility(
+                company_name=company_name,
+                resume_label=resume_path,
+            )
+            return {
+                "overall_match_percent": res["overall_match_percent"],
+                "skill_breakdown": res["skill_breakdown"],
+                "missing_skills": res["missing_skills"],
+            }
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to score company fit: {exc}"}
 
@@ -181,39 +176,17 @@ try:
         },
         fn=_score_company_fit_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'score_company_fit': %s", err)
 
 
 # -- TOOL: research_company --
 try:
-    import httpx
-    from app.enrich.research import research_company
-    from app.utils import RateLimiter
-
     def _research_company_wrapper(company_name: str) -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            co, all_companies = _find_company_by_name(company_name, companies_file)
-
-            rate_limiter = RateLimiter(requests_per_minute=settings.openrouter_rpm)
-            with httpx.Client() as client:
-                updated_co = research_company(co, client, rate_limiter)
-
-            # Save updated company list
-            for idx, item in enumerate(all_companies):
-                if item.dedupe_key() == co.dedupe_key():
-                    all_companies[idx] = updated_co
-                    break
-
-            companies_file.write_bytes(
-                orjson.dumps(
-                    [c.model_dump(mode="json") for c in all_companies],
-                    option=orjson.OPT_INDENT_2
-                )
-            )
-
-            return updated_co.model_dump(mode="json")
+            container = get_container()
+            co = container.research_service.research(company_name=company_name)
+            return co.model_dump(mode="json")
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to research company: {exc}"}
 
@@ -232,34 +205,32 @@ try:
         },
         fn=_research_company_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'research_company': %s", err)
 
 
 # -- TOOL: score_company_attractiveness --
 try:
-    from app.enrich.company_score import score_company_attractiveness
-
     def _score_company_attractiveness_wrapper(company_name: str) -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            co, all_companies = _find_company_by_name(company_name, companies_file)
+            container = get_container()
+            from app.enrich.company_score import score_company_attractiveness
+            companies = container.company_repo.load_all()
+            matches = [c for c in companies if company_name.lower() in c.name.lower()]
+            if not matches:
+                return {"error": f"Company '{company_name}' not found."}
+            if len(matches) > 1:
+                return {"error": f"Multiple companies match '{company_name}': " + ", ".join(c.name for c in matches)}
 
+            co = matches[0]
             updated_co = score_company_attractiveness(co)
 
-            # Save updated company list
-            for idx, item in enumerate(all_companies):
+            for idx, item in enumerate(companies):
                 if item.dedupe_key() == co.dedupe_key():
-                    all_companies[idx] = updated_co
+                    companies[idx] = updated_co
                     break
 
-            companies_file.write_bytes(
-                orjson.dumps(
-                    [c.model_dump(mode="json") for c in all_companies],
-                    option=orjson.OPT_INDENT_2
-                )
-            )
-
+            container.company_repo.save_all(companies)
             return updated_co.model_dump(mode="json")
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to score company attractiveness: {exc}"}
@@ -279,44 +250,24 @@ try:
         },
         fn=_score_company_attractiveness_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'score_company_attractiveness': %s", err)
 
 
 # -- TOOL: generate_email --
 try:
-    import httpx
-    from app.outreach.email import generate_email
-    from app.utils import RateLimiter
-
     def _generate_email_wrapper(company_name: str, template_name: str = "startup") -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            co, all_companies = _find_company_by_name(company_name, companies_file)
-
-            rate_limiter = RateLimiter(requests_per_minute=settings.openrouter_rpm)
-            with httpx.Client() as client:
-                res = generate_email(
-                    company=co,
-                    client=client,
-                    rate_limiter=rate_limiter,
-                    template_name=template_name,
-                )
-
-            # Save updated company list since generate_email writes to co.notes
-            for idx, item in enumerate(all_companies):
-                if item.dedupe_key() == co.dedupe_key():
-                    all_companies[idx] = co
-                    break
-
-            companies_file.write_bytes(
-                orjson.dumps(
-                    [c.model_dump(mode="json") for c in all_companies],
-                    option=orjson.OPT_INDENT_2
-                )
+            container = get_container()
+            res = container.outreach_service.generate_outreach_draft(
+                company_name=company_name,
+                template=template_name,
             )
-
-            return res
+            return {
+                "subject": res["subject"],
+                "body": res["body"],
+                "template_used": res["template_used"],
+            }
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to generate email: {exc}"}
 
@@ -340,96 +291,20 @@ try:
         },
         fn=_generate_email_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'generate_email': %s", err)
 
 
 # -- TOOL: recommend --
 try:
-    from app.resume.parser import load_resume_text
-    from app.cli import resolve_resume_path
-
     def _recommend_wrapper(top: int = 5, resume: Optional[str] = None) -> list[dict] | dict[str, str]:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            if not companies_file.exists():
-                return {"error": "Companies database does not exist. Run discovery first."}
-
-            all_companies = [
-                Company.model_validate(c)
-                for c in orjson.loads(companies_file.read_bytes())
-            ]
-
-            # Filter out contacted
-            from app.agent.memory import load_memory
-            mem = load_memory()
-            rejected = set(mem.get("rejected_companies", []))
-
-            uncontacted = [
-                c for c in all_companies
-                if not any(n.startswith("email_sent:") for n in c.notes)
-                and c.dedupe_key() not in rejected
-            ]
-
-            # Load resume fit if available
-            resume_text = None
-            resume_p = resolve_resume_path(resume)
-            if resume_p and resume_p.exists():
-                resume_text = load_resume_text(resume_p)
-
-            def get_recency(co: Company) -> datetime:
-                dates = [
-                    datetime.combine(j.posted_date, datetime.min.time())
-                    for j in co.jobs if j.posted_date
-                ]
-                if dates:
-                    return max(dates)
-                return co.discovered_at or datetime.min
-
-            def calculate_heuristic_fit(co: Company, r_text: str) -> int:
-                r_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", r_text.lower()))
-                if not r_words:
-                    return 0
-                co_text = (
-                    (co.description or "")
-                    + " "
-                    + " ".join(j.job_title + " " + (j.description or "") for j in co.jobs)
-                )
-                co_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", co_text.lower()))
-                return len(r_words.intersection(co_words))
-
-            scored_list = []
-            unscored_list = []
-
-            for co in uncontacted:
-                is_scored = co.company_score_overall is not None
-                recency = get_recency(co)
-                fit_score = 0
-                if resume_text:
-                    fit_score = calculate_heuristic_fit(co, resume_text)
-
-                item = {
-                    "company": co,
-                    "is_scored": is_scored,
-                    "overall": co.company_score_overall,
-                    "recency": recency,
-                    "fit_score": fit_score,
-                }
-                if is_scored:
-                    scored_list.append(item)
-                else:
-                    unscored_list.append(item)
-
-            # Sort primarily by overall, then recency
-            scored_list.sort(key=lambda x: (x["overall"], x["recency"]), reverse=True)
-            unscored_list.sort(key=lambda x: x["recency"], reverse=True)
-
-            ranked_items = scored_list + unscored_list
-            top_items = ranked_items[:top]
-
+            container = get_container()
+            recs = container.recommendation_service.get_recommendations(top=top, resume_label=resume)
             result_dicts = []
-            for item in top_items:
-                co_dict = item["company"].model_dump(mode="json")
+            for item in recs:
+                co = item["company"]
+                co_dict = co.model_dump(mode="json")
                 co_dict["_recommendation_meta"] = {
                     "overall_score": item["overall"],
                     "fit_score": item["fit_score"],
@@ -437,7 +312,6 @@ try:
                     "is_scored": item["is_scored"]
                 }
                 result_dicts.append(co_dict)
-
             return result_dicts
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to compute recommendations: {exc}"}
@@ -461,46 +335,48 @@ try:
         },
         fn=_recommend_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'recommend': %s", err)
 
 
 # -- TOOL: apply_to_company --
 try:
-    from app.tracker.status import load_applications, save_applications, set_status
-    from app.resume.versions import resolve_resume_version
-
     def _apply_to_company_wrapper(
         company_name: str,
         status: str = "applied",
         resume_version: Optional[str] = None
     ) -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            co, _ = _find_company_by_name(company_name, companies_file)
-
-            # Validate resume version if provided
-            if resume_version:
-                try:
-                    resolve_resume_version(resume_version)
-                except Exception as e:
-                    return {"error": f"Invalid resume version: {e}"}
-
-            apps_path = settings.output_dir / "applications.json"
-            apps = load_applications(apps_path)
+            co, suggestions = _find_company_by_name(company_name)
+            if not co:
+                if suggestions:
+                    return {"error": f"Company '{company_name}' not found. Did you mean: {', '.join(suggestions)}?"}
+                return {"error": f"Company '{company_name}' not found."}
 
             key = co.dedupe_key()
+            container = get_container()
+            apps_path = container.application_repo.filepath
+
+            apps = load_applications(apps_path)
+            if key not in apps:
+                from app.models import Application
+                app_record = Application(
+                    company_key=key,
+                    status="discovered",
+                    status_history=[{"status": "discovered", "date": date.today().isoformat()}],
+                )
+                apps[key] = app_record
+            else:
+                app_record = apps[key]
+
+            from app.tracker.status import set_status
             set_status(apps, key, status)
 
-            # If moving to applied, set additional fields
-            if status == "applied":
-                apps[key].resume_version = resume_version
-                if not apps[key].applied_date:
-                    apps[key].applied_date = date.today()
+            if resume_version:
+                app_record.resume_version = resume_version
 
             save_applications(apps, apps_path)
-
-            return apps[key].model_dump(mode="json")
+            return app_record.model_dump(mode="json")
         except Exception as exc:  # noqa: BLE001
             return {"error": f"Failed to apply status: {exc}"}
 
@@ -529,17 +405,18 @@ try:
         fn=_apply_to_company_wrapper,
         side_effecting=True
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'apply_to_company': %s", err)
 
 
 # -- TOOL: remember_preference --
 try:
-    from app.agent.memory import remember_preference
-
     def _remember_preference_wrapper(key: str, value: str) -> dict:
         try:
-            remember_preference(key, value)
+            from app.agent.memory import load_memory, save_memory
+            mem = load_memory()
+            mem["preferences"][key] = value
+            save_memory(mem)
             return {"status": "success", "key": key, "value": value}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
@@ -563,24 +440,33 @@ try:
         },
         fn=_remember_preference_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'remember_preference': %s", err)
 
 
 # -- TOOL: reject_company --
 try:
-    from app.agent.memory import reject_company
-
     def _reject_company_wrapper(company_key: str, reason: str) -> dict:
         try:
-            companies_file = settings.output_dir / "companies.json"
-            try:
-                co, _ = _find_company_by_name(company_key, companies_file)
-                resolved_key = co.dedupe_key()
-            except Exception:  # noqa: BLE001
+            container = get_container()
+            companies = container.company_repo.load_all()
+            matches = [c for c in companies if company_key.lower() in c.name.lower()]
+            if matches:
+                resolved_key = matches[0].dedupe_key()
+            else:
                 resolved_key = company_key.strip().lower()
 
-            reject_company(resolved_key, reason)
+            from app.agent.memory import load_memory, save_memory
+            mem = load_memory()
+            if resolved_key not in mem["rejected_companies"]:
+                mem["rejected_companies"].append(resolved_key)
+            mem["past_decisions"].append({
+                "date": date.today().isoformat(),
+                "action": "reject",
+                "company_key": resolved_key,
+                "reason": reason
+            })
+            save_memory(mem)
             return {"status": "success", "rejected_company_key": resolved_key}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
@@ -604,7 +490,7 @@ try:
         },
         fn=_reject_company_wrapper
     )
-except ImportError as err:
+except Exception as err:
     logger.warning("Skipped registering tool 'reject_company': %s", err)
 
 
@@ -619,7 +505,7 @@ def execute_approved_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str
         return {"error": f"Tool execution failed: {exc}"}
 
 
-# 3. Retrieve specs for OpenRouter/OpenAI tool-calling formatting
+# Retrieve specs for OpenRouter/OpenAI tool-calling formatting
 def get_tool_specs() -> list[dict[str, Any]]:
     """Return tool specifications in OpenAI/OpenRouter tools formatting."""
     specs = []

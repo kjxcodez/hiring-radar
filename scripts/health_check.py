@@ -20,114 +20,89 @@ console = Console(legacy_windows=True) if sys.platform == "win32" else Console()
 
 
 def run_checks() -> bool:
-    all_ok = True
+    from app.services.config import ServiceContainer
+    container = ServiceContainer()
+    health_service = container.health_service
 
     console.print("\n[bold purple]=== Hiring Radar System Diagnostics ===[/bold purple]\n")
 
+    # Call service
+    res = health_service.run_checks()
+
     # 1. Check Configuration & Environment
     console.print("[bold]1. Configuration & Settings:[/bold]")
-    try:
-        from app.config import settings, yaml_config
+    if res["env_present"]:
+        console.print("  [green][OK][/green] .env file is present.")
+    else:
+        console.print("  [yellow][WARN][/yellow] .env file is missing (using system env variables).")
 
-        # Check .env presence
-        env_file = Path(".env")
-        if env_file.exists():
-            console.print("  [green][OK][/green] .env file is present.")
-        else:
-            console.print("  [yellow][WARN][/yellow] .env file is missing (using system env variables).")
+    if res["config_yaml_present"]:
+        console.print("  [green][OK][/green] config.yaml file is present.")
+    else:
+        console.print("  [yellow][WARN][/yellow] config.yaml file is missing (using default preferences).")
 
-        # Check config.yaml presence
-        yaml_file = Path("config.yaml")
-        if yaml_file.exists():
-            console.print("  [green][OK][/green] config.yaml file is present.")
-        else:
-            console.print("  [yellow][WARN][/yellow] config.yaml file is missing (using default preferences).")
+    if res["openrouter_api_key_ok"]:
+        console.print("  [green][OK][/green] OPENROUTER_API_KEY is configured.")
+    else:
+        console.print("  [red][FAIL][/red] OPENROUTER_API_KEY is missing.")
 
-        # Validate OpenRouter settings
-        if settings.openrouter_api_key:
-            console.print("  [green][OK][/green] OPENROUTER_API_KEY is configured.")
-        else:
-            console.print("  [red][FAIL][/red] OPENROUTER_API_KEY is missing.")
-            all_ok = False
-
+    if res["openrouter_api_key_ok"]:
         console.print("  [green][OK][/green] settings and user config loaded successfully.")
-
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"  [red][FAIL][/red] Failed to load configuration: {exc}")
-        all_ok = False
 
     console.print()
 
     # 2. Check Database Files
     console.print("[bold]2. Database Integrity:[/bold]")
-    try:
-        from app.config import settings
+    co_state = res["companies_db_state"]
+    if co_state == "missing":
+        db_path = container.settings.output_dir / "companies.json"
+        console.print(f"  [yellow][WARN][/yellow] database '{db_path}' does not exist yet (run discover first).")
+    elif co_state == "corrupt":
+        db_path = container.settings.output_dir / "companies.json"
+        console.print(f"  [red][FAIL][/red] '{db_path}' format is invalid (expected JSON array).")
+    else:
+        db_path = container.settings.output_dir / "companies.json"
+        num_cos = co_state.split("(")[1].split()[0]
+        console.print(f"  [green][OK][/green] '{db_path}' is readable and valid JSON ({num_cos} companies).")
 
-        db_path = settings.output_dir / "companies.json"
-        if not db_path.exists():
-            console.print(f"  [yellow][WARN][/yellow] database '{db_path}' does not exist yet (run discover first).")
-        else:
-            data = db_path.read_bytes()
-            companies = orjson.loads(data)
-            if isinstance(companies, list):
-                console.print(f"  [green][OK][/green] '{db_path}' is readable and valid JSON ({len(companies)} companies).")
-            else:
-                console.print(f"  [red][FAIL][/red] '{db_path}' format is invalid (expected JSON array).")
-                all_ok = False
-
-        apps_path = settings.output_dir / "applications.json"
-        if not apps_path.exists():
-            console.print(f"  [green][OK][/green] Applications db '{apps_path}' is empty/not started.")
-        else:
-            apps_data = apps_path.read_bytes()
-            apps = orjson.loads(apps_data)
-            if isinstance(apps, dict):
-                console.print(f"  [green][OK][/green] '{apps_path}' is readable and valid JSON ({len(apps)} applications).")
-            else:
-                console.print(f"  [red][FAIL][/red] '{apps_path}' format is invalid (expected JSON object).")
-                all_ok = False
-
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"  [red][FAIL][/red] Failed to verify database: {exc}")
-        all_ok = False
+    app_state = res["applications_db_state"]
+    apps_path = container.settings.output_dir / "applications.json"
+    if app_state == "empty":
+        console.print(f"  [green][OK][/green] Applications db '{apps_path}' is empty/not started.")
+    elif app_state == "corrupt":
+        console.print(f"  [red][FAIL][/red] '{apps_path}' format is invalid (expected JSON object).")
+    else:
+        num_apps = app_state.split("(")[1].split()[0]
+        console.print(f"  [green][OK][/green] '{apps_path}' is readable and valid JSON ({num_apps} applications).")
 
     console.print()
 
     # 3. Check Telegram Notification Configuration
     console.print("[bold]3. Telegram Notifications:[/bold]")
-    try:
-        from app.notify.telegram import send_telegram_message
-        from app.config import settings, yaml_config
+    bot_token = container.settings.telegram_bot_token
+    chat_id = container.yaml_config.telegram.chat_id
+    enabled = container.yaml_config.telegram.enabled
 
-        bot_token = settings.telegram_bot_token
-        chat_id = yaml_config.telegram.chat_id
-        enabled = yaml_config.telegram.enabled
+    if bot_token and chat_id:
+        console.print(f"  - Bot Token: [green]configured[/green] (starts with: '{bot_token[:8]}...')")
+        console.print(f"  - Chat ID:   [green]configured[/green] ('{chat_id}')")
+        console.print(f"  - Enabled:   {enabled}")
 
-        if bot_token and chat_id:
-            console.print(f"  - Bot Token: [green]configured[/green] (starts with: '{bot_token[:8]}...')")
-            console.print(f"  - Chat ID:   [green]configured[/green] ('{chat_id}')")
-            console.print(f"  - Enabled:   {enabled}")
-
-            if not enabled:
-                console.print("  [yellow][WARN][/yellow] Telegram is configured but disabled in config.yaml.")
-            else:
-                console.print("  [cyan][INFO][/cyan] Attempting to send a diagnostics test message...")
-                success = send_telegram_message("Health Check: Diagnostics test message delivered successfully!")
-                if success:
-                    console.print("  [green][OK][/green] Telegram diagnostics test message sent successfully.")
-                else:
-                    console.print("  [red][FAIL][/red] Telegram sendMessage request failed. Check bot privileges.")
-                    all_ok = False
+        if not enabled:
+            console.print("  [yellow][WARN][/yellow] Telegram is configured but disabled in config.yaml.")
         else:
-            console.print("  [yellow][WARN][/yellow] Telegram notifications not configured (bot token or chat id is missing).")
-
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"  [red][FAIL][/red] Failed to test Telegram notifications: {exc}")
-        all_ok = False
+            console.print("  [cyan][INFO][/cyan] Attempting to send a diagnostics test message...")
+            success = health_service.test_telegram()
+            if success:
+                console.print("  [green][OK][/green] Telegram diagnostics test message sent successfully.")
+            else:
+                console.print("  [red][FAIL][/red] Telegram sendMessage request failed. Check bot privileges.")
+    else:
+        console.print("  [yellow][WARN][/yellow] Telegram notifications not configured (bot token or chat id is missing).")
 
     console.print()
 
-    # Final synthesized report
+    all_ok = res["all_ok"]
     if all_ok:
         console.print("[bold green]System Health Check: ALL CHECKS PASSED SUCCESSFULLY![/bold green]\n")
     else:

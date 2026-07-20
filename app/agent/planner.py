@@ -42,7 +42,6 @@ def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> ht
 def build_agent_system_prompt() -> str:
     """Return the system instructions for the AI Agent planner loop."""
     from app.agent.memory import load_memory
-
     mem = load_memory()
     prefs = mem.get("preferences", {})
     rejected = mem.get("rejected_companies", [])

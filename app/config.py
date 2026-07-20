@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # --- AI / LLM ---
     openrouter_api_key: str | None = None
-    openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_model: str = "openrouter/free"
 
     # --- Output ---
     output_dir: Path = Path("output")
