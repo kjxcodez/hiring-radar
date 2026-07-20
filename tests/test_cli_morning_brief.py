@@ -10,10 +10,19 @@ from app.cli import morning_brief
 
 
 class TestCliMorningBrief(unittest.TestCase):
+    def setUp(self):
+        import app.cli
+        app.cli.reset_container()
+
+    def tearDown(self):
+        import app.cli
+        app.cli.reset_container()
+
     @patch("app.cli.console")
     @patch("app.cli.yaml_config")
     @patch("app.cli.settings")
     def test_morning_brief_unconfigured_exits_cleanly(self, mock_settings, mock_yaml, mock_console):
+
         # Configure Telegram to be disabled
         mock_settings.telegram_bot_token = None
         mock_yaml.telegram.chat_id = ""

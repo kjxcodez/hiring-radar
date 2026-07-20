@@ -14,6 +14,7 @@ from app.cli import activity_report
 
 class TestCliReport(unittest.TestCase):
     def setUp(self):
+        import app.cli
         # Setup temporary directories and files
         self.temp_path = Path("output_test_report")
         self.temp_path.mkdir(exist_ok=True)
@@ -24,14 +25,18 @@ class TestCliReport(unittest.TestCase):
             self.companies_file.unlink()
         if self.apps_file.exists():
             self.apps_file.unlink()
+        app.cli.reset_container()
 
     def tearDown(self):
+        import app.cli
         if self.companies_file.exists():
             self.companies_file.unlink()
         if self.apps_file.exists():
             self.apps_file.unlink()
         if self.temp_path.exists():
             self.temp_path.rmdir()
+        app.cli.reset_container()
+
 
     @patch("app.cli.console")
     @patch("app.cli.yaml_config")

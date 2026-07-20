@@ -125,3 +125,30 @@ class ServiceContainer:
                 yaml_config=self.yaml_config
             )
         return self._health_service
+
+    def reset(self) -> None:
+        """Reset the service container settings and cached service instances."""
+        import app.config
+        self.settings = app.config.settings
+        self.yaml_config = app.config.yaml_config
+
+        # Repositories
+        self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
+        self.application_repo = ApplicationRepository(self.settings.output_dir / "applications.json")
+        self.memory_repo = MemoryRepository(self.settings.output_dir / "agent_memory.json")
+        self.profile_repo = ProfileRepository(
+            profiles_dir=Path("profiles"),
+            alerts_path=Path("alerts.yaml")
+        )
+
+        # Services
+        self._discovery_service = None
+        self._scraping_service = None
+        self._research_service = None
+        self._resume_service = None
+        self._outreach_service = None
+        self._tracker_service = None
+        self._recommendation_service = None
+        self._dashboard_service = None
+        self._health_service = None
+

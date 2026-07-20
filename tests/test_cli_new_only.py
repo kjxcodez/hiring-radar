@@ -14,6 +14,7 @@ from app.cli import _run_discovery
 
 class TestCliNewOnly(unittest.TestCase):
     def setUp(self):
+        import app.cli
         # We will mock the output directory to be a temp dir
         self.output_dir_patcher = patch("app.cli.settings")
         self.mock_settings = self.output_dir_patcher.start()
@@ -27,13 +28,17 @@ class TestCliNewOnly(unittest.TestCase):
             self.temp_path.rmdir()
 
         self.temp_path.mkdir(exist_ok=True)
+        app.cli.reset_container()
 
     def tearDown(self):
+        import app.cli
         if self.companies_file.exists():
             self.companies_file.unlink()
         if self.temp_path.exists():
             self.temp_path.rmdir()
         self.output_dir_patcher.stop()
+        app.cli.reset_container()
+
 
     @patch("app.cli.console")
     @patch("app.cli.load_seed_slugs")
