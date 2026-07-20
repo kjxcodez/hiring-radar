@@ -45,6 +45,7 @@ class DiscoveryService:
             local_registry = getattr(cli_mod, "SOURCE_REGISTRY", local_registry)
             local_load_seed_slugs = getattr(cli_mod, "load_seed_slugs", local_load_seed_slugs)
 
+
         # 1. Parse sources
         source_list = [s.strip() for s in sources.split(",") if s.strip()]
         unknown = [s for s in source_list if s not in local_registry and s not in ("remoteok", "wwr")]

@@ -12,9 +12,10 @@ from loguru import logger
 from rich.panel import Panel
 from rich.table import Table
 
-from app.cli.common import _render_preview_panel, console, get_container
+from app.cli.common import _render_preview_panel, console, get_container, resolve_symbol
 from app.config import settings, yaml_config
 from app.utils import RateLimiter
+
 
 # ---------------------------------------------------------------------------
 # 8. preview
@@ -409,9 +410,11 @@ def morning_brief(
     ] = settings.output_dir / "companies.json",
 ) -> None:
     """Generate a daily cold outreach hiring digest and send it to Telegram."""
-    bot_token = settings.telegram_bot_token
-    chat_id = yaml_config.telegram.chat_id
-    enabled = yaml_config.telegram.enabled
+    curr_settings = resolve_symbol("settings", settings)
+    curr_yaml_config = resolve_symbol("yaml_config", yaml_config)
+    bot_token = curr_settings.telegram_bot_token
+    chat_id = curr_yaml_config.telegram.chat_id
+    enabled = curr_yaml_config.telegram.enabled
 
     if not bot_token or not chat_id or not enabled:
         console.print(
@@ -420,7 +423,9 @@ def morning_brief(
         )
         raise typer.Exit(code=0)
 
-    outreach_digest(input=input, send=True)
+    curr_outreach_digest = resolve_symbol("outreach_digest", outreach_digest)
+    curr_outreach_digest(input=input, send=True)
+
 
 
 # ---------------------------------------------------------------------------

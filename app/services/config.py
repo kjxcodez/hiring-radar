@@ -6,9 +6,15 @@ from app.repositories import CompanyRepository, ApplicationRepository, MemoryRep
 
 class ServiceContainer:
     def __init__(self):
+        import sys
         import app.config
         self.settings = app.config.settings
         self.yaml_config = app.config.yaml_config
+        if "app.cli" in sys.modules:
+            cli_mod = sys.modules["app.cli"]
+            self.settings = getattr(cli_mod, "settings", self.settings)
+            self.yaml_config = getattr(cli_mod, "yaml_config", self.yaml_config)
+
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
@@ -128,9 +134,15 @@ class ServiceContainer:
 
     def reset(self) -> None:
         """Reset the service container settings and cached service instances."""
+        import sys
         import app.config
         self.settings = app.config.settings
         self.yaml_config = app.config.yaml_config
+        if "app.cli" in sys.modules:
+            cli_mod = sys.modules["app.cli"]
+            self.settings = getattr(cli_mod, "settings", self.settings)
+            self.yaml_config = getattr(cli_mod, "yaml_config", self.yaml_config)
+
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
