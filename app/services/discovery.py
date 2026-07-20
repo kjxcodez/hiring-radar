@@ -11,15 +11,25 @@ from app.discover import remoteok as _remoteok_mod
 from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs
 from app.filters import apply_filters
-from app.saved_search import SavedSearch, load_saved_searches, save_saved_searches
-from app.repositories import CompanyRepository, ProfileRepository
+from app.saved_search import SavedSearch
+from app.repositories import CompanyRepository, ProfileRepository, SavedSearchRepository
 from app.config import Settings
 from app.profiles import SearchProfile
 
+
 class DiscoveryService:
-    def __init__(self, company_repo: CompanyRepository, profile_repo: ProfileRepository, settings: Settings):
+    """Service to discover and filter companies from configured job boards."""
+
+    def __init__(
+        self,
+        company_repo: CompanyRepository,
+        profile_repo: ProfileRepository,
+        saved_search_repo: SavedSearchRepository,
+        settings: Settings,
+    ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
+        self.saved_search_repo = saved_search_repo
         self.settings = settings
 
     def discover(
@@ -44,7 +54,6 @@ class DiscoveryService:
             cli_mod = sys.modules["app.cli"]
             local_registry = getattr(cli_mod, "SOURCE_REGISTRY", local_registry)
             local_load_seed_slugs = getattr(cli_mod, "load_seed_slugs", local_load_seed_slugs)
-
 
         # 1. Parse sources
         source_list = [s.strip() for s in sources.split(",") if s.strip()]
@@ -151,11 +160,18 @@ class DiscoveryService:
     def save_saved_search(self, name: str, sources: str, limit: int, profile: Optional[str] = None, **kwargs) -> None:
         """Create or update a saved search definition."""
         source_list = [s.strip() for s in sources.split(",") if s.strip()]
-        unknown = [s for s in source_list if s not in SOURCE_REGISTRY and s not in ("remoteok", "wwr")]
+        # Import to match source registry
+        local_registry = SOURCE_REGISTRY
+        import sys
+        if "app.cli" in sys.modules:
+            cli_mod = sys.modules["app.cli"]
+            local_registry = getattr(cli_mod, "SOURCE_REGISTRY", local_registry)
+
+        unknown = [s for s in source_list if s not in local_registry and s not in ("remoteok", "wwr")]
         if unknown:
             raise ValueError(f"Unknown source(s): {', '.join(unknown)}")
 
-        searches = load_saved_searches()
+        searches = self.saved_search_repo.load_all()
         s = SavedSearch(
             name=name,
             profile=profile,
@@ -168,8 +184,8 @@ class DiscoveryService:
             days=kwargs.get("days"),
         )
         searches[name] = s
-        save_saved_searches(searches)
+        self.saved_search_repo.save_all(searches)
 
     def load_saved_searches(self) -> dict[str, SavedSearch]:
         """Expose loaded searches to presenter."""
-        return load_saved_searches()
+        return self.saved_search_repo.load_all()

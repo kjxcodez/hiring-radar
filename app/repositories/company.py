@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import orjson
 from app.models import Company
+from app.exceptions import CompanyNotFoundError, MultipleCompaniesFoundError
+
 
 class CompanyRepository:
     def __init__(self, filepath: Path):
@@ -29,3 +31,16 @@ class CompanyRepository:
                 option=orjson.OPT_INDENT_2,
             )
         )
+
+    def find_by_name(self, name: str) -> Company:
+        """Find a unique company by name substring, raising domain exceptions if not unique."""
+        all_companies = self.load_all()
+        matches = [c for c in all_companies if name.lower() in c.name.lower()]
+        if not matches:
+            raise CompanyNotFoundError(f"Company '{name}' not found.")
+        if len(matches) > 1:
+            raise MultipleCompaniesFoundError(
+                f"Multiple companies match '{name}': "
+                + ", ".join(c.name for c in matches)
+            )
+        return matches[0]

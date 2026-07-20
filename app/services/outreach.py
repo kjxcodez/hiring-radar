@@ -7,10 +7,13 @@ from app.models import Company
 from app.repositories import CompanyRepository
 from app.outreach.email import generate_email
 from app.outreach.mailer import send_email, send_test_email
-from app.outreach.subjects import generate_subject_lines
 from app.config import Settings, YamlConfig
+from app.exceptions import CompanyNotFoundError
+
 
 class OutreachService:
+    """Service to handle generating, marking, and sending outreach emails."""
+
     def __init__(self, company_repo: CompanyRepository, settings: Settings, yaml_config: YamlConfig):
         self.company_repo = company_repo
         self.settings = settings
@@ -24,16 +27,7 @@ class OutreachService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Generate email subject line and body candidates for a company."""
-        all_companies = self.company_repo.load_all()
-
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
-        if not matches:
-            raise ValueError(f"Company '{company_name}' not found.")
-        if len(matches) > 1:
-            raise ValueError(f"Multiple companies match '{company_name}': " + ", ".join(c.name for c in matches))
-
-        co = matches[0]
-
+        co = self.company_repo.find_by_name(company_name)
         res = generate_email(co, template_name=template, model=model, dry_run=dry_run)
         recipient = co.recruiter_email or (co.generic_emails[0] if co.generic_emails else "(no email found)")
 
@@ -55,17 +49,17 @@ class OutreachService:
 
     def mark_email_sent(self, company_name: str, template: str) -> None:
         """Append email_sent metadata note to the company record and refresh timestamp."""
-        all_companies = self.company_repo.load_all()
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
-        if not matches:
+        try:
+            co = self.company_repo.find_by_name(company_name)
+        except CompanyNotFoundError:
             return
 
-        co = matches[0]
         note_text = f"email_sent: {date.today().isoformat()} via {template}"
         if note_text not in co.notes:
             co.notes.append(note_text)
         co.last_updated = datetime.now()
 
+        all_companies = self.company_repo.load_all()
         for idx, item in enumerate(all_companies):
             if item.dedupe_key() == co.dedupe_key():
                 all_companies[idx] = co

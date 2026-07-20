@@ -21,6 +21,7 @@ from app.cli.common import (
     resolve_resume_path,
     _container,
     reset_container,
+    track_progress,
 )
 
 # Re-export settings & configuration
@@ -60,6 +61,7 @@ __all__ = [
     "get_container",
     "_container",
     "reset_container",
+    "track_progress",
     "settings",
     "yaml_config",
     "orjson",

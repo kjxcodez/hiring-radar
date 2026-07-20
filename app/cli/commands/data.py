@@ -7,7 +7,6 @@ from typing import Annotated, Optional
 
 import typer
 from rich.panel import Panel
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from app.cli.common import console, get_container
@@ -61,20 +60,8 @@ def scrape(
         scraping_service = ScrapingService(CompanyRepository(input), container.settings)
 
     # --- Process progress ---
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Scraping", total=0)
-
-        def progress_callback(name: str, idx: int, total: int) -> None:
-            progress.update(task, total=total)
-            progress.update(task, description=f"[bold cyan]{name[:40]}", completed=idx)
-
+    from app.cli.common import track_progress
+    with track_progress("Scraping") as progress_callback:
         res = scraping_service.scrape(
             company_filter=company,
             force=force,
@@ -157,20 +144,8 @@ def enrich(
         scraping_service = ScrapingService(CompanyRepository(input), container.settings)
 
     # --- Process progress ---
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Enriching", total=0)
-
-        def progress_callback(name: str, idx: int, total: int) -> None:
-            progress.update(task, total=total)
-            progress.update(task, description=f"[bold cyan]{name[:40]}", completed=idx)
-
+    from app.cli.common import track_progress
+    with track_progress("Enriching") as progress_callback:
         res = scraping_service.enrich(
             model=model,
             dry_run=dry_run,

@@ -12,7 +12,10 @@ from app.resume.suggestions import suggest_resume_tailoring
 from app.resume.versions import resolve_resume_version, list_resume_versions
 from app.config import Settings
 
+
 class ResumeService:
+    """Service to score resumes and generate tailored resumes/suggestions."""
+
     def __init__(self, company_repo: CompanyRepository, profile_repo: ProfileRepository, settings: Settings):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
@@ -45,15 +48,7 @@ class ResumeService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Compare resume text against jobs to determine match ratings, missing skills, and metrics."""
-        all_companies = self.company_repo.load_all()
-
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
-        if not matches:
-            raise ValueError(f"Company '{company_name}' not found.")
-        if len(matches) > 1:
-            raise ValueError(f"Multiple companies match '{company_name}': " + ", ".join(c.name for c in matches))
-
-        co = matches[0]
+        co = self.company_repo.find_by_name(company_name)
 
         resume_path = self.resolve_version_path(resume_label)
         if not resume_path:
@@ -78,15 +73,7 @@ class ResumeService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Generate keywords, projects, objective highlights, and reordering suggestions for tailoring."""
-        all_companies = self.company_repo.load_all()
-
-        matches = [c for c in all_companies if company_name.lower() in c.name.lower()]
-        if not matches:
-            raise ValueError(f"Company '{company_name}' not found.")
-        if len(matches) > 1:
-            raise ValueError(f"Multiple companies match '{company_name}': " + ", ".join(c.name for c in matches))
-
-        co = matches[0]
+        co = self.company_repo.find_by_name(company_name)
 
         resume_path = self.resolve_version_path(resume_label)
         if not resume_path:
@@ -103,6 +90,7 @@ class ResumeService:
                 co.notes.append(note_text)
             co.last_updated = datetime.now()
 
+            all_companies = self.company_repo.load_all()
             for idx, item in enumerate(all_companies):
                 if item.dedupe_key() == co.dedupe_key():
                     all_companies[idx] = co

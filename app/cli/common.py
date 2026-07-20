@@ -8,7 +8,8 @@ because __init__ imports from them).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Generator, Callable
+import contextlib
 
 from rich.console import Console
 from rich.panel import Panel
@@ -169,4 +170,32 @@ def build_discovery_event_callback() -> Any:
             curr_console.print(f"  [yellow]⚠[/yellow]  Could not load existing data ({data['error']}) — starting fresh.")
 
     return event_callback
+
+
+# ---------------------------------------------------------------------------
+# Shared Progress utility
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def track_progress(description: str) -> Generator[Callable[[str, int, int], None], None, None]:
+    """Context manager to display a rich progress bar and yield a callback for progress updates."""
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+    curr_console = resolve_symbol("console", console)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=curr_console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description, total=0)
+
+        def progress_callback(name: str, idx: int, total: int) -> None:
+            progress.update(task, total=total)
+            progress.update(task, description=f"[bold cyan]{name[:40]}", completed=idx)
+
+        yield progress_callback
+
 

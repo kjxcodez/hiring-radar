@@ -2,9 +2,31 @@ from __future__ import annotations
 
 from pathlib import Path
 from app.config import settings, yaml_config
-from app.repositories import CompanyRepository, ApplicationRepository, MemoryRepository, ProfileRepository
+from app.repositories import (
+    CompanyRepository,
+    ApplicationRepository,
+    MemoryRepository,
+    ProfileRepository,
+    SavedSearchRepository,
+)
+from typing import Any
+
+
+def _resolve_config_value(config_val: Any, cli_val: Any) -> Any:
+    """Helper to detect and return the mocked settings/config if present in tests."""
+    def is_mock(obj: Any) -> bool:
+        return "mock" in type(obj).__name__.lower()
+
+    if is_mock(cli_val):
+        return cli_val
+    if is_mock(config_val):
+        return config_val
+    return config_val
+
 
 class ServiceContainer:
+    """Service container that manages lifecycles and wires up dependencies."""
+
     def __init__(self):
         import sys
         import app.config
@@ -12,15 +34,10 @@ class ServiceContainer:
         self.yaml_config = app.config.yaml_config
         if "app.cli" in sys.modules:
             cli_mod = sys.modules["app.cli"]
-            # Only prefer app.cli.settings when a test has replaced it with a mock
-            # (i.e. it is no longer the same object as app.config.settings).
             cli_settings = getattr(cli_mod, "settings", self.settings)
-            if cli_settings is not app.config.settings:
-                self.settings = cli_settings
+            self.settings = _resolve_config_value(app.config.settings, cli_settings)
             cli_yaml = getattr(cli_mod, "yaml_config", self.yaml_config)
-            if cli_yaml is not app.config.yaml_config:
-                self.yaml_config = cli_yaml
-
+            self.yaml_config = _resolve_config_value(app.config.yaml_config, cli_yaml)
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
@@ -30,6 +47,7 @@ class ServiceContainer:
             profiles_dir=Path("profiles"),
             alerts_path=Path("alerts.yaml")
         )
+        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json")
 
         # Services (lazy-initialized to avoid circular imports or fast startup issues)
         self._discovery_service = None
@@ -44,17 +62,20 @@ class ServiceContainer:
 
     @property
     def discovery_service(self):
+        """Lazy-initialized DiscoveryService instance."""
         if self._discovery_service is None:
             from app.services.discovery import DiscoveryService
             self._discovery_service = DiscoveryService(
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
+                saved_search_repo=self.saved_search_repo,
                 settings=self.settings
             )
         return self._discovery_service
 
     @property
     def scraping_service(self):
+        """Lazy-initialized ScrapingService instance."""
         if self._scraping_service is None:
             from app.services.scraping import ScrapingService
             self._scraping_service = ScrapingService(
@@ -65,6 +86,7 @@ class ServiceContainer:
 
     @property
     def research_service(self):
+        """Lazy-initialized ResearchService instance."""
         if self._research_service is None:
             from app.services.research import ResearchService
             self._research_service = ResearchService(
@@ -75,6 +97,7 @@ class ServiceContainer:
 
     @property
     def resume_service(self):
+        """Lazy-initialized ResumeService instance."""
         if self._resume_service is None:
             from app.services.resume import ResumeService
             self._resume_service = ResumeService(
@@ -86,6 +109,7 @@ class ServiceContainer:
 
     @property
     def outreach_service(self):
+        """Lazy-initialized OutreachService instance."""
         if self._outreach_service is None:
             from app.services.outreach import OutreachService
             self._outreach_service = OutreachService(
@@ -97,6 +121,7 @@ class ServiceContainer:
 
     @property
     def tracker_service(self):
+        """Lazy-initialized TrackerService instance."""
         if self._tracker_service is None:
             from app.services.tracker import TrackerService
             self._tracker_service = TrackerService(
@@ -107,17 +132,20 @@ class ServiceContainer:
 
     @property
     def recommendation_service(self):
+        """Lazy-initialized RecommendationService instance."""
         if self._recommendation_service is None:
             from app.services.recommendation import RecommendationService
             self._recommendation_service = RecommendationService(
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
+                resume_service=self.resume_service,
                 settings=self.settings
             )
         return self._recommendation_service
 
     @property
     def dashboard_service(self):
+        """Lazy-initialized DashboardService instance."""
         if self._dashboard_service is None:
             from app.services.dashboard import DashboardService
             self._dashboard_service = DashboardService(
@@ -128,6 +156,7 @@ class ServiceContainer:
 
     @property
     def health_service(self):
+        """Lazy-initialized HealthService instance."""
         if self._health_service is None:
             from app.services.health import HealthService
             self._health_service = HealthService(
@@ -146,9 +175,10 @@ class ServiceContainer:
         self.yaml_config = app.config.yaml_config
         if "app.cli" in sys.modules:
             cli_mod = sys.modules["app.cli"]
-            self.settings = getattr(cli_mod, "settings", self.settings)
-            self.yaml_config = getattr(cli_mod, "yaml_config", self.yaml_config)
-
+            cli_settings = getattr(cli_mod, "settings", self.settings)
+            self.settings = _resolve_config_value(app.config.settings, cli_settings)
+            cli_yaml = getattr(cli_mod, "yaml_config", self.yaml_config)
+            self.yaml_config = _resolve_config_value(app.config.yaml_config, cli_yaml)
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
@@ -158,6 +188,7 @@ class ServiceContainer:
             profiles_dir=Path("profiles"),
             alerts_path=Path("alerts.yaml")
         )
+        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json")
 
         # Services
         self._discovery_service = None
@@ -169,4 +200,3 @@ class ServiceContainer:
         self._recommendation_service = None
         self._dashboard_service = None
         self._health_service = None
-

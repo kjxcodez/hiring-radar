@@ -1,18 +1,29 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, date
+from datetime import datetime
 from typing import Optional, Any
 
 from app.models import Company
 from app.repositories import CompanyRepository, ProfileRepository
 from app.resume.parser import load_resume_text
 from app.config import Settings
+from app.services.resume import ResumeService
+
 
 class RecommendationService:
-    def __init__(self, company_repo: CompanyRepository, profile_repo: ProfileRepository, settings: Settings):
+    """Service to rank and recommend companies to apply to."""
+
+    def __init__(
+        self,
+        company_repo: CompanyRepository,
+        profile_repo: ProfileRepository,
+        resume_service: ResumeService,
+        settings: Settings,
+    ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
+        self.resume_service = resume_service
         self.settings = settings
 
     def get_recommendations(self, top: int = 5, resume_label: Optional[str] = None) -> list[dict[str, Any]]:
@@ -29,10 +40,8 @@ class RecommendationService:
         resume_text = None
         resume_path = None
         if resume_label or self.settings.resume_path:
-            # Import resolve_resume_path lazily to avoid circular dependencies
-            from app.cli import resolve_resume_path
             try:
-                resume_path = resolve_resume_path(resume_label)
+                resume_path = self.resume_service.resolve_version_path(resume_label)
                 if resume_path and resume_path.exists():
                     resume_text = load_resume_text(resume_path)
             except Exception:
