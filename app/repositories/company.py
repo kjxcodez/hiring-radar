@@ -1,36 +1,32 @@
 from __future__ import annotations
 
 from pathlib import Path
-import orjson
 from app.models import Company
 from app.exceptions import CompanyNotFoundError, MultipleCompaniesFoundError
+from app.storage import JsonStorage
 
 
 class CompanyRepository:
-    def __init__(self, filepath: Path):
+    """Repository managing Company entity persistence using JsonStorage."""
+
+    def __init__(self, filepath: Path, storage: JsonStorage | None = None):
         self.filepath = filepath
+        self.storage = storage or JsonStorage()
 
     def load_all(self) -> list[Company]:
         """Read all companies from the database, returning parsed models."""
-        if not self.filepath.exists():
-            return []
         try:
-            raw = self.filepath.read_bytes()
-            if not raw:
+            data = self.storage.read(self.filepath)
+            if not data or not isinstance(data, list):
                 return []
-            return [Company.model_validate(c) for c in orjson.loads(raw)]
+            return [Company.model_validate(c) for c in data]
         except Exception:
             return []
 
     def save_all(self, companies: list[Company]) -> None:
         """Serialize and write all companies back to the JSON file."""
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        self.filepath.write_bytes(
-            orjson.dumps(
-                [c.model_dump(mode="json") for c in companies],
-                option=orjson.OPT_INDENT_2,
-            )
-        )
+        data = [c.model_dump(mode="json") for c in companies]
+        self.storage.write(self.filepath, data)
 
     def find_by_name(self, name: str) -> Company:
         """Find a unique company by name substring, raising domain exceptions if not unique."""

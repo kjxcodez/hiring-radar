@@ -10,7 +10,6 @@ import json
 from datetime import date
 from pathlib import Path
 
-import orjson
 from loguru import logger
 
 from app.models import Application, ApplicationStatus
@@ -31,11 +30,12 @@ def load_applications(path: Path) -> dict[str, Application]:
 
     Returns an empty dict if the file does not exist.
     """
-    if not path.exists():
-        return {}
-
+    from app.storage import JsonStorage
     try:
-        data = orjson.loads(path.read_bytes())
+        storage = JsonStorage()
+        data = storage.read(path)
+        if not data or not isinstance(data, dict):
+            return {}
         return {
             key: Application.model_validate(val)
             for key, val in data.items()
@@ -47,14 +47,11 @@ def load_applications(path: Path) -> dict[str, Application]:
 
 def save_applications(apps: dict[str, Application], path: Path) -> None:
     """Serialize the applications dictionary to applications.json."""
+    from app.storage import JsonStorage
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(
-            orjson.dumps(
-                {key: app.model_dump(mode="json") for key, app in apps.items()},
-                option=orjson.OPT_INDENT_2,
-            )
-        )
+        storage = JsonStorage()
+        serialized = {key: app.model_dump(mode="json") for key, app in apps.items()}
+        storage.write(path, serialized)
     except Exception as exc:
         logger.error("Failed to save applications to {path}: {exc}", path=path, exc=exc)
         raise exc

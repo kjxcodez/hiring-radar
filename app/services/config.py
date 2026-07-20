@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from app.config import settings, yaml_config
 from app.repositories import (
     CompanyRepository,
@@ -9,7 +10,7 @@ from app.repositories import (
     ProfileRepository,
     SavedSearchRepository,
 )
-from typing import Any
+from app.storage import JsonStorage
 
 
 def _resolve_config_value(config_val: Any, cli_val: Any) -> Any:
@@ -39,15 +40,18 @@ class ServiceContainer:
             cli_yaml = getattr(cli_mod, "yaml_config", self.yaml_config)
             self.yaml_config = _resolve_config_value(app.config.yaml_config, cli_yaml)
 
+        # Storage layer
+        self.storage = JsonStorage()
+
         # Repositories
-        self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
-        self.application_repo = ApplicationRepository(self.settings.output_dir / "applications.json")
-        self.memory_repo = MemoryRepository(self.settings.output_dir / "agent_memory.json")
+        self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json", storage=self.storage)
+        self.application_repo = ApplicationRepository(self.settings.output_dir / "applications.json", storage=self.storage)
+        self.memory_repo = MemoryRepository(self.settings.output_dir / "agent_memory.json", storage=self.storage)
         self.profile_repo = ProfileRepository(
             profiles_dir=Path("profiles"),
             alerts_path=Path("alerts.yaml")
         )
-        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json")
+        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json", storage=self.storage)
 
         # Services (lazy-initialized to avoid circular imports or fast startup issues)
         self._discovery_service = None
@@ -180,15 +184,18 @@ class ServiceContainer:
             cli_yaml = getattr(cli_mod, "yaml_config", self.yaml_config)
             self.yaml_config = _resolve_config_value(app.config.yaml_config, cli_yaml)
 
+        # Storage layer
+        self.storage = JsonStorage()
+
         # Repositories
-        self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json")
-        self.application_repo = ApplicationRepository(self.settings.output_dir / "applications.json")
-        self.memory_repo = MemoryRepository(self.settings.output_dir / "agent_memory.json")
+        self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json", storage=self.storage)
+        self.application_repo = ApplicationRepository(self.settings.output_dir / "applications.json", storage=self.storage)
+        self.memory_repo = MemoryRepository(self.settings.output_dir / "agent_memory.json", storage=self.storage)
         self.profile_repo = ProfileRepository(
             profiles_dir=Path("profiles"),
             alerts_path=Path("alerts.yaml")
         )
-        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json")
+        self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json", storage=self.storage)
 
         # Services
         self._discovery_service = None

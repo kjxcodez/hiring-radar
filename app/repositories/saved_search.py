@@ -3,27 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-import orjson
 from app.saved_search import SavedSearch
+from app.storage import JsonStorage
 
 
 class SavedSearchRepository:
-    """Repository handling persistence of saved search configurations."""
+    """Repository handling persistence of saved search configurations using JsonStorage."""
 
-    def __init__(self, filepath: Path):
+    def __init__(self, filepath: Path, storage: JsonStorage | None = None):
         self.filepath = filepath
+        self.storage = storage or JsonStorage()
 
     def load_all(self) -> dict[str, SavedSearch]:
         """Read all saved searches from the JSON file."""
-        if not self.filepath.exists():
-            return {}
-
         try:
-            raw = self.filepath.read_bytes()
-            if not raw:
-                return {}
-            data = orjson.loads(raw)
-            if not isinstance(data, dict):
+            data = self.storage.read(self.filepath)
+            if not data or not isinstance(data, dict):
                 return {}
             return {name: SavedSearch.model_validate(val) for name, val in data.items()}
         except Exception:
@@ -31,6 +26,5 @@ class SavedSearchRepository:
 
     def save_all(self, searches: dict[str, SavedSearch]) -> None:
         """Write all saved searches back to the JSON file."""
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
         serialized = {name: s.model_dump(mode="json") for name, s in searches.items()}
-        self.filepath.write_bytes(orjson.dumps(serialized, option=orjson.OPT_INDENT_2))
+        self.storage.write(self.filepath, serialized)
