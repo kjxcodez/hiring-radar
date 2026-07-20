@@ -12,8 +12,14 @@ class ServiceContainer:
         self.yaml_config = app.config.yaml_config
         if "app.cli" in sys.modules:
             cli_mod = sys.modules["app.cli"]
-            self.settings = getattr(cli_mod, "settings", self.settings)
-            self.yaml_config = getattr(cli_mod, "yaml_config", self.yaml_config)
+            # Only prefer app.cli.settings when a test has replaced it with a mock
+            # (i.e. it is no longer the same object as app.config.settings).
+            cli_settings = getattr(cli_mod, "settings", self.settings)
+            if cli_settings is not app.config.settings:
+                self.settings = cli_settings
+            cli_yaml = getattr(cli_mod, "yaml_config", self.yaml_config)
+            if cli_yaml is not app.config.yaml_config:
+                self.yaml_config = cli_yaml
 
 
         # Repositories
