@@ -85,6 +85,9 @@ app.add_typer(apply_app, name="apply")
 from app.cli.commands.recommendation import recommend_app, recommend_cli
 app.add_typer(recommend_app, name="recommend")
 
+from app.cli.commands.monitoring import monitor_app
+app.add_typer(monitor_app, name="monitor")
+
 
 # 9. Research, 10. Score-company, 11. Tailor
 from app.cli.commands.enrichment import research_cli, score_company_cli, tailor_cli

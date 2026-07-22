@@ -52,6 +52,7 @@ from app.cli.commands.outreach import (
 from app.cli.commands.tracker import note_cli, followups
 from app.cli.commands.outreach_crm import apply_callback as apply_cli
 from app.cli.commands.recommendation import recommend_cli
+from app.cli.commands.monitoring import monitor_callback as monitor_cli
 from app.cli.commands.enrichment import research_cli, score_company_cli, tailor_cli
 
 from app.cli.commands.system import view_dashboard, mcp_serve, agent
@@ -93,6 +94,7 @@ __all__ = [
     "note_cli",
     "followups",
     "recommend_cli",
+    "monitor_cli",
     "research_cli",
     "score_company_cli",
     "tailor_cli",

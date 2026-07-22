@@ -49,16 +49,7 @@ class JobChangeDetector:
             else:
                 # 2. Job updates
                 prev_job = prev_map[url]
-                # Check salary changes
-                if prev_job.salary_min != curr_job.salary_min or prev_job.salary_max != curr_job.salary_max:
-                    events.append(
-                        SalaryChanged(
-                            company_name=company_name,
-                            job_url=url,
-                            previous_value=f"${prev_job.salary_min or 0} - ${prev_job.salary_max or 0}",
-                            current_value=f"${curr_job.salary_min or 0} - ${curr_job.salary_max or 0}",
-                        )
-                    )
+
                 # Check remote changes
                 if prev_job.remote_type != curr_job.remote_type:
                     events.append(
@@ -101,12 +92,12 @@ class CompanyChangeDetector:
     @staticmethod
     def detect(previous: Company, current: Company) -> List[ChangeEvent]:
         events = []
-        if previous.is_hiring != current.is_hiring:
+        if previous.company_score_overall != current.company_score_overall:
             events.append(
                 HiringStatusChanged(
                     company_name=current.name,
-                    previous_value=str(previous.is_hiring),
-                    current_value=str(current.is_hiring),
+                    previous_value=str(previous.company_score_overall),
+                    current_value=str(current.company_score_overall),
                 )
             )
         return events
