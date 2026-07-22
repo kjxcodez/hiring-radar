@@ -13,15 +13,23 @@ class RecommendationService:
         self,
         company_repo: CompanyRepository,
         profile_repo: ProfileRepository,
-        resume_service: ResumeService,
         settings: Settings,
+        resume_service: Optional[ResumeService] = None,
         workflow_engine: Any = None,
     ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
-        self.resume_service = resume_service
         self.settings = settings
+        self._resume_service = resume_service
         self._workflow_engine = workflow_engine
+
+    @property
+    def resume_service(self) -> Any:
+        """Resolve ResumeService instance lazily."""
+        if self._resume_service is None:
+            from app.cli.common import get_container
+            self._resume_service = get_container().resume_service
+        return self._resume_service
 
     @property
     def workflow_engine(self) -> Any:

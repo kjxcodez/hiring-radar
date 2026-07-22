@@ -93,3 +93,17 @@ from app.cli.commands.system import view_dashboard, mcp_serve, agent
 app.command(name="dashboard")(view_dashboard)
 app.command(name="mcp-serve")(mcp_serve)
 app.command(name="agent")(agent)
+
+# 26. Background Jobs
+jobs_app = typer.Typer(
+    name="jobs",
+    help="Monitor and manage background tasks and execution history.",
+    no_args_is_help=True,
+)
+app.add_typer(jobs_app, name="jobs")
+
+from app.cli.commands.jobs import jobs_list, jobs_history, jobs_cancel, jobs_retry
+jobs_app.command(name="list")(jobs_list)
+jobs_app.command(name="history")(jobs_history)
+jobs_app.command(name="cancel")(jobs_cancel)
+jobs_app.command(name="retry")(jobs_retry)

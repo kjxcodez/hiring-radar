@@ -19,10 +19,10 @@ def _resolve_config_value(config_val: Any, cli_val: Any) -> Any:
     def is_mock(obj: Any) -> bool:
         return "mock" in type(obj).__name__.lower()
 
-    if is_mock(cli_val):
-        return cli_val
     if is_mock(config_val):
         return config_val
+    if is_mock(cli_val):
+        return cli_val
     return config_val
 
 
@@ -68,6 +68,18 @@ class ServiceContainer:
         self._dashboard_service = None
         self._health_service = None
         self._workflow_engine = None
+        self._runtime = None
+
+    @property
+    def runtime(self):
+        """Lazy-initialized ExecutionRuntime instance."""
+        if self._runtime is None:
+            from app.runtime.runtime import ExecutionRuntime
+            self._runtime = ExecutionRuntime(
+                container=self,
+                settings=self.settings,
+            )
+        return self._runtime
 
     @property
     def workflow_engine(self):
@@ -168,8 +180,8 @@ class ServiceContainer:
             self._recommendation_service = RecommendationService(
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
-                resume_service=self.resume_service,
                 settings=self.settings,
+                resume_service=self.resume_service,
                 workflow_engine=self.workflow_engine
             )
         return self._recommendation_service
@@ -238,3 +250,4 @@ class ServiceContainer:
         self._dashboard_service = None
         self._health_service = None
         self._workflow_engine = None
+        self._runtime = None

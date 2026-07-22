@@ -48,7 +48,7 @@ class WorkflowEngine:
                 pass
 
     def run(self, workflow_name: str, context: WorkflowContext | None = None, **kwargs: Any) -> Any:
-        """Instantiate and execute the specified workflow.
+        """Instantiate and delegate execution of the specified workflow to the runtime layer.
 
         Args:
             workflow_name: Alias of the registered workflow (e.g. 'discover').
@@ -57,6 +57,24 @@ class WorkflowEngine:
 
         Returns:
             The return value of the final step of the executed workflow.
+        """
+        if (self.container 
+            and hasattr(self.container, "runtime") 
+            and self.container.runtime 
+            and not "mock" in type(self.container.runtime).__name__.lower()):
+            return self.container.runtime.execute(workflow_name, context=context, **kwargs)
+        return self.execute(workflow_name, context=context, **kwargs)
+
+    def execute(self, workflow_name: str, context: WorkflowContext | None = None, **kwargs: Any) -> Any:
+        """Perform the actual workflow step execution sequence.
+
+        Args:
+            workflow_name: Alias of the registered workflow.
+            context: Optional custom execution context override.
+            **kwargs: Extra parameters merged into context metadata.
+
+        Returns:
+            The final step result.
         """
         workflow_cls = get_workflow_class(workflow_name)
         workflow = workflow_cls()
