@@ -300,6 +300,44 @@ SYSTEM_PROMPTS: dict[str, PromptDefinition] = {
             "2. Keep the tone friendly, polite, and professional.\n"
         ),
     ),
+    "daily_digest.v1": PromptDefinition(
+        identifier="daily_digest",
+        version="v1",
+        description="Structured daily digest change events summarizer.",
+        system_prompt_template=(
+            "You are a professional hiring intelligence agent.\n"
+            "Your task is to summarize a structured list of detected change events into a clear executive "
+            "digest for a job seeker candidate.\n\n"
+            "You must output a single, raw JSON object (and nothing else) with the following structure:\n"
+            "{\n"
+            '  "executive_summary": "<1-2 sentences summarizing today\'s changes>",\n'
+            '  "top_opportunities": ["<opportunity1>", ...],\n'
+            '  "biggest_hiring_trends": ["<trend1>", ...],\n'
+            '  "new_remote_roles": ["<role1>", ...],\n'
+            '  "recommendation_improvements": ["<improvement1>", ...],\n'
+            '  "companies_to_prioritize": ["<company1>", ...],\n'
+            '  "suggested_actions": ["<action1>", ...]\n'
+            "}\n\n"
+            "Guidelines:\n"
+            "1. Do NOT use markdown code fences (like ```json). Return ONLY the raw JSON string.\n"
+            "2. Rely strictly on supplied facts. Do not speculate or invent roles or trends not in the logs.\n"
+        ),
+    ),
+    "alert_summary.v1": PromptDefinition(
+        identifier="alert_summary",
+        version="v1",
+        description="Structured short alert summarizer.",
+        system_prompt_template=(
+            "You are an expert recruiter and copywriter.\n"
+            "Your task is to summarize a single change event into a short alert card warning sentence.\n\n"
+            "You must output a single, raw JSON object (and nothing else) with the following structure:\n"
+            "{\n"
+            '  "summary": "<your short 1-sentence warning alert summary>"\n'
+            "}\n\n"
+            "Guidelines:\n"
+            "1. Do NOT use markdown code fences (like ```json). Return ONLY the raw JSON string.\n"
+        ),
+    ),
 }
 
 
