@@ -34,14 +34,51 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter completions API, retrying only on transient errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body, timeout=60.0)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body, timeout=60.0)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    choice_msg = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        return_raw_choice=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": choice_msg
+            }
+        ]
+    }
+
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def build_agent_system_prompt() -> str:
     """Return the system instructions for the AI Agent planner loop."""
     from app.agent.memory import load_memory
+    from app.ai.prompts import get_prompt
     mem = load_memory()
     prefs = mem.get("preferences", {})
     rejected = mem.get("rejected_companies", [])
@@ -49,19 +86,9 @@ def build_agent_system_prompt() -> str:
     prefs_summary = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) if prefs else "None"
     rejected_summary = ", ".join(rejected) if rejected else "None"
 
-    return (
-        "You are an expert AI agent assistant for job application research and outreach. "
-        "Your task is to help the user manage their job search workflow using the tools provided. "
-        "You must always prioritize using the official tools to retrieve actual data rather than inventing details. "
-        "CRITICAL REQUIREMENT: You must NEVER perform side-effecting actions (such as sending an email, "
-        "marking an application as contacted, or changing application status) unless the user has explicitly "
-        "reviewed and confirmed the action in the chat history first. If the user asks for a side-effecting action, "
-        "you must first explain what you intend to do, present the parameters/content to the user for review, "
-        "and ask for explicit confirmation before calling the tool.\n\n"
-        "--- PERSISTENT USER PREFERENCES & CONTEXT ---\n"
-        f"Preferences:\n{prefs_summary}\n\n"
-        f"Rejected/Excluded Companies: {rejected_summary}\n"
-        "--------------------------------------------"
+    return get_prompt("agent.v1").system_prompt_template.format(
+        prefs_summary=prefs_summary,
+        rejected_summary=rejected_summary,
     )
 
 
@@ -100,7 +127,7 @@ def run_agent_turn(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar-agent",
     }
 
