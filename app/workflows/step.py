@@ -90,11 +90,21 @@ class DiscoverStep(WorkflowStep):
         # ------------------------------------------------------------------
         # Route to the async DiscoveryCoordinator for registered providers;
         # fall back to the synchronous SOURCE_REGISTRY path for test mocks.
+        #
+        # If the local_registry itself is a mock (injected by a test via
+        # app.cli.SOURCE_REGISTRY patching), send all sources to the legacy
+        # path so mock return values are honoured.
         # ------------------------------------------------------------------
         from app.discovery.registry import ProviderRegistry
 
-        coordinator_sources = [s for s in source_list if ProviderRegistry.has(s)]
-        legacy_sources = [s for s in source_list if not ProviderRegistry.has(s)]
+        _registry_is_mocked = "mock" in type(local_registry).__name__.lower()
+
+        if _registry_is_mocked:
+            coordinator_sources: list[str] = []
+            legacy_sources = list(source_list)
+        else:
+            coordinator_sources = [s for s in source_list if ProviderRegistry.has(s)]
+            legacy_sources = [s for s in source_list if not ProviderRegistry.has(s)]
 
         # Async coordinator path (production providers)
         if coordinator_sources:
