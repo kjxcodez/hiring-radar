@@ -40,3 +40,41 @@ class CompanyRepository:
                 + ", ".join(c.name for c in matches)
             )
         return matches[0]
+
+    def insert_many(self, companies: list[Company]) -> None:
+        """Insert multiple companies, skipping duplicates based on dedupe_key."""
+        existing = self.load_all()
+        existing_keys = {c.dedupe_key() for c in existing}
+        to_add = [c for c in companies if c.dedupe_key() not in existing_keys]
+        if to_add:
+            self.save_all(existing + to_add)
+
+    def update_many(self, companies: list[Company]) -> None:
+        """Update multiple existing companies in the database."""
+        existing = self.load_all()
+        by_key = {c.dedupe_key(): c for c in existing}
+        updated = False
+        for c in companies:
+            key = c.dedupe_key()
+            if key in by_key:
+                by_key[key] = c
+                updated = True
+        if updated:
+            self.save_all(list(by_key.values()))
+
+    def delete_many(self, companies: list[Company]) -> None:
+        """Remove multiple companies from the database."""
+        existing = self.load_all()
+        keys_to_delete = {c.dedupe_key() for c in companies}
+        remaining = [c for c in existing if c.dedupe_key() not in keys_to_delete]
+        if len(remaining) < len(existing):
+            self.save_all(remaining)
+
+    def upsert_many(self, companies: list[Company]) -> None:
+        """Insert or update multiple companies based on dedupe_key."""
+        existing = self.load_all()
+        by_key = {c.dedupe_key(): c for c in existing}
+        for c in companies:
+            by_key[c.dedupe_key()] = c
+        self.save_all(list(by_key.values()))
+
