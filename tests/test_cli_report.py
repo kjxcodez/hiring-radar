@@ -72,13 +72,14 @@ class TestCliReport(unittest.TestCase):
         # 1. Populated companies database
         now_str = datetime.utcnow().isoformat()
         yesterday_str = (datetime.utcnow() - timedelta(days=2)).isoformat()
+        today_date_str = datetime.utcnow().date().isoformat()
         
         c1 = Company(
             name="New Corp",
             domain="newcorp.com",
             discovered_at=now_str,
             last_updated=now_str,
-            notes=["email_sent: 2026-07-16 via startup"],
+            notes=[f"email_sent: {today_date_str} via startup"],
             jobs=[
                 JobPosting(
                     job_title="Software Engineer",
@@ -107,13 +108,13 @@ class TestCliReport(unittest.TestCase):
                 "company_key": "newcorp.com",
                 "status": "applied",
                 "status_history": [
-                    {"status": "discovered", "date": "2026-07-15"},
-                    {"status": "applied", "date": "2026-07-16"}
+                    {"status": "discovered", "date": (datetime.utcnow() - timedelta(days=1)).date().isoformat()},
+                    {"status": "applied", "date": today_date_str}
                 ],
-                "applied_date": "2026-07-16",
+                "applied_date": today_date_str,
                 "resume_version": "default",
                 "notes": [],
-                "last_contact_date": "2026-07-16"
+                "last_contact_date": today_date_str
             }
         }
         self.apps_file.write_bytes(json.dumps(apps_data).encode("utf-8"))
