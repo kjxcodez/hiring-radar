@@ -6,9 +6,12 @@ No I/O, HTTP, or file logic lives here — pure data shapes only.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal, Optional
-from typing import List, Dict
+from typing import List, Dict, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.outreach.profile import OutreachMessage, Recruiter, Referral, FollowUp, TimelineEntry
+from app.recommendation.profile import CandidateProfile
+
 
 class BusinessProfile(BaseModel):
     """Firmographic and operational business details."""
@@ -154,7 +157,11 @@ class Company(BaseModel):
         return self.name.lower().strip()
 
 
-ApplicationStatus = Literal["discovered", "researched", "applied", "interviewing", "rejected", "offer"]
+ApplicationStatus = Literal[
+    "discovered", "researched", "applied", "interviewing", "rejected", "offer",
+    "Planned", "Prepared", "Applied", "Recruiter Contacted", "Screening",
+    "Technical Interview", "Manager Interview", "Offer", "Accepted", "Rejected", "Withdrawn"
+]
 
 
 class Application(BaseModel):
@@ -169,4 +176,18 @@ class Application(BaseModel):
     resume_version: str | None = None
     notes: list[str] = Field(default_factory=list)
     last_contact_date: date | None = None
+
+    # Outreach CRM fields
+    candidate: Optional[CandidateProfile] = None
+    company: Optional[Company] = None
+    job: Optional[JobPosting] = None
+    recruiter: Optional[Recruiter] = None
+    referral: Optional[Referral] = None
+    cover_letter_version: str | None = None
+    messages: list[OutreachMessage] = Field(default_factory=list)
+    timeline: list[TimelineEntry] = Field(default_factory=list)
+    next_followup: Optional[str] = None
+    followup_schedule: list[FollowUp] = Field(default_factory=list)
+    last_updated: Optional[datetime] = None
+
 
