@@ -111,6 +111,11 @@ class ServiceContainer:
                         self.runtime.submit("recommend_job")
                     except Exception:  # noqa: BLE001
                         pass
+                elif isinstance(event, WorkflowCompleted) and event.workflow_name == "recommend_job":
+                    try:
+                        self.runtime.submit("recommend_outreach")
+                    except Exception:  # noqa: BLE001
+                        pass
             self._workflow_engine.register_event_listener(_on_workflow_event)
 
         return self._workflow_engine
@@ -277,6 +282,7 @@ class ServiceContainer:
         self._intelligence_engine = None
         self._recommendation_engine = None
         self._recommendation_repo = None
+        self._outreach_engine = None
 
     @property
     def sync_engine(self):
@@ -310,6 +316,14 @@ class ServiceContainer:
             from app.recommendation.engine import RecommendationEngine
             self._recommendation_engine = RecommendationEngine(self, self.settings)
         return self._recommendation_engine
+
+    @property
+    def outreach_engine(self):
+        """Lazy-initialized OutreachEngine instance."""
+        if self._outreach_engine is None:
+            from app.outreach.engine import OutreachEngine
+            self._outreach_engine = OutreachEngine(self)
+        return self._outreach_engine
 
 
 
