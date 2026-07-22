@@ -24,6 +24,7 @@ from app.workflows.step import (
     LoadCandidateStep,
     RunRecommendationEngineStep,
     OutreachPrepareStep,
+    MonitoringStep,
 )
 
 if TYPE_CHECKING:
@@ -224,6 +225,24 @@ class ApplicationPrepareWorkflow(Workflow):
     def run(self, context: WorkflowContext) -> Any:
         super().run(context)
         return True
+
+
+# ===========================================================================
+# 10. Monitoring Workflow
+# ===========================================================================
+
+class MonitoringWorkflow(Workflow):
+    """Workflow to execute hiring intelligence checks and alert pipelines."""
+    name = "monitoring"
+    description = "Analyze company/job state modifications, dispatch alerts, and compile AI digests."
+    steps = [
+        MonitoringStep(),
+    ]
+
+    def run(self, context: WorkflowContext) -> Any:
+        super().run(context)
+        return context.metadata.get("monitoring_events", [])
+
 
 
 

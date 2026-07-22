@@ -15,6 +15,7 @@ from app.workflows.workflow import (
     IntelligenceWorkflow,
     AIRecommendationWorkflow,
     ApplicationPrepareWorkflow,
+    MonitoringWorkflow,
 )
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ _WORKFLOW_MAP: dict[str, type[Workflow]] = {
     "intelligence": IntelligenceWorkflow,
     "recommend_job": AIRecommendationWorkflow,
     "recommend_outreach": ApplicationPrepareWorkflow,
+    "monitoring": MonitoringWorkflow,
 }
 
 

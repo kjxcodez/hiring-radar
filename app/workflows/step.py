@@ -862,4 +862,18 @@ class OutreachPrepareStep(WorkflowStep):
         context.progress.advance(self.name, "Applications successfully prepared.", percent=100)
 
 
+class MonitoringStep(WorkflowStep):
+    """Workflow step executing change detectors, alert routing, and digest compilation."""
+    name = "Monitoring"
+    description = "Detect entity changes, prioritize alerts, and compile daily digest."
+
+    def execute(self, context: Any) -> None:
+        force = context.metadata.get("force", False)
+        context.progress.advance(self.name, "Running change detection checks...", percent=30)
+        events = context.container.monitoring_engine.run_monitoring(force=force)
+        context.metadata["monitoring_events"] = events
+        context.progress.advance(self.name, "Monitoring analysis complete.", percent=100)
+
+
+
 

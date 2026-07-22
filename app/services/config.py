@@ -56,6 +56,13 @@ class ServiceContainer:
             alerts_path=Path("alerts.yaml")
         )
         self.saved_search_repo = SavedSearchRepository(self.settings.output_dir / "saved_searches.json", storage=self.storage)
+        from app.monitoring.repository import MonitoringRepository
+        self.monitoring_repo = MonitoringRepository(
+            events_path=self.settings.output_dir / "monitoring_events.json",
+            alerts_path=self.settings.output_dir / "alerts.json",
+            digest_path=self.settings.output_dir / "daily_digest.json",
+            storage=self.storage,
+        )
 
         # Services (lazy-initialized to avoid circular imports or fast startup issues)
         self._discovery_service = None
@@ -114,6 +121,11 @@ class ServiceContainer:
                 elif isinstance(event, WorkflowCompleted) and event.workflow_name == "recommend_job":
                     try:
                         self.runtime.submit("recommend_outreach")
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif isinstance(event, WorkflowCompleted) and event.workflow_name == "recommend_outreach":
+                    try:
+                        self.runtime.submit("monitoring")
                     except Exception:  # noqa: BLE001
                         pass
             self._workflow_engine.register_event_listener(_on_workflow_event)
@@ -283,6 +295,7 @@ class ServiceContainer:
         self._recommendation_engine = None
         self._recommendation_repo = None
         self._outreach_engine = None
+        self._monitoring_engine = None
 
     @property
     def sync_engine(self):
@@ -324,6 +337,14 @@ class ServiceContainer:
             from app.outreach.engine import OutreachEngine
             self._outreach_engine = OutreachEngine(self)
         return self._outreach_engine
+
+    @property
+    def monitoring_engine(self):
+        """Lazy-initialized MonitoringEngine instance."""
+        if self._monitoring_engine is None:
+            from app.monitoring.engine import MonitoringEngine
+            self._monitoring_engine = MonitoringEngine(self)
+        return self._monitoring_engine
 
 
 
