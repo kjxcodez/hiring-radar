@@ -71,6 +71,9 @@ class ServiceContainer:
         self._runtime = None
         self._sync_engine = None
         self._intelligence_engine = None
+        self._recommendation_engine = None
+        self._recommendation_repo = None
+
 
 
 
@@ -101,6 +104,11 @@ class ServiceContainer:
                 if isinstance(event, WorkflowCompleted) and event.workflow_name == "discover":
                     try:
                         self.runtime.submit("intelligence")
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif isinstance(event, WorkflowCompleted) and event.workflow_name == "intelligence":
+                    try:
+                        self.runtime.submit("recommend")
                     except Exception:  # noqa: BLE001
                         pass
             self._workflow_engine.register_event_listener(_on_workflow_event)
@@ -264,10 +272,11 @@ class ServiceContainer:
         self._recommendation_service = None
         self._dashboard_service = None
         self._health_service = None
-        self._workflow_engine = None
         self._runtime = None
         self._sync_engine = None
         self._intelligence_engine = None
+        self._recommendation_engine = None
+        self._recommendation_repo = None
 
     @property
     def sync_engine(self):
@@ -284,5 +293,23 @@ class ServiceContainer:
             from app.intelligence.engine import CompanyIntelligenceEngine
             self._intelligence_engine = CompanyIntelligenceEngine(self, self.settings)
         return self._intelligence_engine
+
+    @property
+    def recommendation_repo(self):
+        """Lazy-initialized RecommendationRepository instance."""
+        if self._recommendation_repo is None:
+            from app.recommendation.repository import RecommendationRepository
+            recs_filepath = self.settings.output_dir / "recommendations.json"
+            self._recommendation_repo = RecommendationRepository(recs_filepath, self.storage)
+        return self._recommendation_repo
+
+    @property
+    def recommendation_engine(self):
+        """Lazy-initialized RecommendationEngine instance."""
+        if self._recommendation_engine is None:
+            from app.recommendation.engine import RecommendationEngine
+            self._recommendation_engine = RecommendationEngine(self, self.settings)
+        return self._recommendation_engine
+
 
 

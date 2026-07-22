@@ -49,8 +49,10 @@ from app.cli.commands.outreach import (
     morning_brief,
     activity_report,
 )
-from app.cli.commands.tracker import apply_cli, note_cli, followups, recommend_cli
+from app.cli.commands.tracker import apply_cli, note_cli, followups
+from app.cli.commands.recommendation import recommend_cli
 from app.cli.commands.enrichment import research_cli, score_company_cli, tailor_cli
+
 from app.cli.commands.system import view_dashboard, mcp_serve, agent
 
 # Export all symbols so 'from app.cli import *' works identically

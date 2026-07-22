@@ -746,3 +746,78 @@ class UpdateGraphStep(WorkflowStep):
         graph.save(graph_path, context.repositories.company_repo.storage)
         context.progress.advance(self.name, "Knowledge Graph update complete.", percent=100)
 
+
+class LoadCandidateStep(WorkflowStep):
+    """Loads candidate profile from resume file, JSON, or falls back to defaults."""
+    name = "LoadCandidate"
+    description = "Load or parse candidate profile properties."
+
+    def execute(self, context: Any) -> None:
+        from pathlib import Path
+        from app.recommendation.profile import CandidateProfile
+        from app.recommendation.resume import ResumeParser
+        from app.resume.versions import resolve_resume_version
+
+        # 1. Check if profile passed directly in metadata
+        cand = context.metadata.get("candidate_profile")
+        if cand and isinstance(cand, CandidateProfile):
+            return
+
+        # 2. Check if resume path passed in metadata
+        resume_file = context.metadata.get("resume_path")
+        if not resume_file:
+            # Fall back to settings resume_path or default
+            if context.settings.resume_path:
+                resume_file = context.settings.resume_path
+            else:
+                try:
+                    # Best effort resolve default
+                    resume_file = resolve_resume_version("default")
+                except Exception:
+                    pass
+
+        if resume_file:
+            path = Path(resume_file)
+            if path.exists():
+                context.progress.advance(self.name, f"Parsing candidate resume {path.name}...", percent=50)
+                try:
+                    # Check if JSON profile directly
+                    if path.suffix.lower() == ".json":
+                        from app.storage import JsonStorage
+                        data = JsonStorage().read(path)
+                        cand = CandidateProfile.model_validate(data)
+                    else:
+                        cand = ResumeParser.parse(path, context.ai_gateway)
+                except Exception as exc:
+                    logger.warning("LoadCandidateStep: parse failed - {exc}", exc=exc)
+                    cand = CandidateProfile()
+            else:
+                cand = CandidateProfile()
+        else:
+            cand = CandidateProfile()
+
+        context.metadata["candidate_profile"] = cand
+        context.progress.advance(self.name, "Candidate profile loaded.", percent=100)
+
+
+class RecommendStep(WorkflowStep):
+    """Executes recommendation matching and persistence pipeline."""
+    name = "Recommend"
+    description = "Match candidate features and score jobs."
+
+    def execute(self, context: Any) -> None:
+        cand = context.metadata.get("candidate_profile")
+        if not cand:
+            from app.recommendation.profile import CandidateProfile
+            cand = CandidateProfile()
+
+        engine = context.container.recommendation_engine
+        force = context.metadata.get("force", False)
+
+        context.progress.advance(self.name, "Running match scoring engine...", percent=30)
+        recs = engine.recommend(cand, force=force)
+        
+        context.metadata["recommendations"] = recs
+        context.progress.advance(self.name, "Saving recommendations and finishing.", percent=100)
+
+
