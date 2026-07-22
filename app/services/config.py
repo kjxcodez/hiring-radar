@@ -67,6 +67,19 @@ class ServiceContainer:
         self._recommendation_service = None
         self._dashboard_service = None
         self._health_service = None
+        self._workflow_engine = None
+
+    @property
+    def workflow_engine(self):
+        """Lazy-initialized WorkflowEngine instance."""
+        if self._workflow_engine is None:
+            from app.workflows.engine import WorkflowEngine
+            self._workflow_engine = WorkflowEngine(
+                container=self,
+                settings=self.settings,
+                ai_gateway=self.ai_gateway,
+            )
+        return self._workflow_engine
 
     @property
     def discovery_service(self):
@@ -77,7 +90,8 @@ class ServiceContainer:
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
                 saved_search_repo=self.saved_search_repo,
-                settings=self.settings
+                settings=self.settings,
+                workflow_engine=self.workflow_engine
             )
         return self._discovery_service
 
@@ -89,7 +103,8 @@ class ServiceContainer:
             self._scraping_service = ScrapingService(
                 company_repo=self.company_repo,
                 settings=self.settings,
-                ai_gateway=self.ai_gateway
+                ai_gateway=self.ai_gateway,
+                workflow_engine=self.workflow_engine
             )
         return self._scraping_service
 
@@ -101,7 +116,8 @@ class ServiceContainer:
             self._research_service = ResearchService(
                 company_repo=self.company_repo,
                 settings=self.settings,
-                ai_gateway=self.ai_gateway
+                ai_gateway=self.ai_gateway,
+                workflow_engine=self.workflow_engine
             )
         return self._research_service
 
@@ -114,7 +130,8 @@ class ServiceContainer:
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
                 settings=self.settings,
-                ai_gateway=self.ai_gateway
+                ai_gateway=self.ai_gateway,
+                workflow_engine=self.workflow_engine
             )
         return self._resume_service
 
@@ -127,7 +144,8 @@ class ServiceContainer:
                 company_repo=self.company_repo,
                 settings=self.settings,
                 yaml_config=self.yaml_config,
-                ai_gateway=self.ai_gateway
+                ai_gateway=self.ai_gateway,
+                workflow_engine=self.workflow_engine
             )
         return self._outreach_service
 
@@ -151,7 +169,8 @@ class ServiceContainer:
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
                 resume_service=self.resume_service,
-                settings=self.settings
+                settings=self.settings,
+                workflow_engine=self.workflow_engine
             )
         return self._recommendation_service
 
@@ -218,3 +237,4 @@ class ServiceContainer:
         self._recommendation_service = None
         self._dashboard_service = None
         self._health_service = None
+        self._workflow_engine = None

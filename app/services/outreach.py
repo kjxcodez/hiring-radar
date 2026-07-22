@@ -3,10 +3,7 @@ from __future__ import annotations
 from typing import Optional, Any
 from datetime import datetime, date
 
-from app.models import Company
 from app.repositories import CompanyRepository
-from app.outreach.email import generate_email
-from app.outreach.mailer import send_email, send_test_email
 from app.config import Settings, YamlConfig
 from app.exceptions import CompanyNotFoundError
 from app.ai import AiGateway
@@ -21,11 +18,21 @@ class OutreachService:
         settings: Settings,
         yaml_config: YamlConfig,
         ai_gateway: AiGateway | None = None,
+        workflow_engine: Any = None,
     ):
         self.company_repo = company_repo
         self.settings = settings
         self.yaml_config = yaml_config
         self.ai_gateway = ai_gateway
+        self._workflow_engine = workflow_engine
+
+    @property
+    def workflow_engine(self) -> Any:
+        """Resolve WorkflowEngine instance from CLI container context."""
+        if self._workflow_engine is None:
+            from app.cli.common import get_container
+            self._workflow_engine = get_container().workflow_engine
+        return self._workflow_engine
 
     def generate_outreach_draft(
         self,
@@ -35,30 +42,31 @@ class OutreachService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Generate email subject line and body candidates for a company."""
-        co = self.company_repo.find_by_name(company_name)
-        res = generate_email(
-            co,
-            template_name=template,
+        from app.workflows.context import WorkflowContext
+
+        context = WorkflowContext(
+            settings=self.settings,
+            container=self.workflow_engine.container,
+        )
+
+        res = self.workflow_engine.run(
+            "outreach",
+            context=context,
+            company_name=company_name,
+            template=template,
             model=model,
             dry_run=dry_run,
-            ai_gateway=self.ai_gateway,
         )
-        recipient = co.recruiter_email or (co.generic_emails[0] if co.generic_emails else "(no email found)")
-
-        return {
-            "company": co,
-            "recipient": recipient,
-            "subject": res.get("subject", ""),
-            "body": res.get("body", ""),
-            "template_used": res.get("template_used", template),
-        }
+        return res
 
     def send_outreach_email(self, recipient: str, subject: str, body: str) -> bool:
         """Deliver plain-text outreach email to the destination using settings credentials."""
+        from app.outreach.mailer import send_email
         return send_email(to_address=recipient, subject=subject, body=body)
 
     def send_test_email(self, to_address: str) -> bool:
         """Deliver connection verification email."""
+        from app.outreach.mailer import send_test_email
         return send_test_email(to_address=to_address)
 
     def mark_email_sent(self, company_name: str, template: str) -> None:
@@ -79,4 +87,3 @@ class OutreachService:
                 all_companies[idx] = co
                 break
         self.company_repo.save_all(all_companies)
-        

@@ -7,8 +7,6 @@ from datetime import datetime
 from app.models import Company
 from app.repositories import CompanyRepository, ProfileRepository
 from app.resume.parser import load_resume_text
-from app.resume.score import score_company
-from app.resume.suggestions import suggest_resume_tailoring
 from app.resume.versions import resolve_resume_version, list_resume_versions
 from app.config import Settings
 from app.ai import AiGateway
@@ -23,11 +21,21 @@ class ResumeService:
         profile_repo: ProfileRepository,
         settings: Settings,
         ai_gateway: AiGateway | None = None,
+        workflow_engine: Any = None,
     ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
         self.settings = settings
         self.ai_gateway = ai_gateway
+        self._workflow_engine = workflow_engine
+
+    @property
+    def workflow_engine(self) -> Any:
+        """Resolve WorkflowEngine instance from CLI container context."""
+        if self._workflow_engine is None:
+            from app.cli.common import get_container
+            self._workflow_engine = get_container().workflow_engine
+        return self._workflow_engine
 
     def list_versions(self) -> list[str]:
         """Return a sorted list of all available resume stems in the resumes/ folder."""
@@ -56,28 +64,22 @@ class ResumeService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Compare resume text against jobs to determine match ratings, missing skills, and metrics."""
-        co = self.company_repo.find_by_name(company_name)
+        from app.workflows.context import WorkflowContext
 
-        resume_path = self.resolve_version_path(resume_label)
-        if not resume_path:
-            raise ValueError("Resume path is not set in settings or passed options.")
+        context = WorkflowContext(
+            settings=self.settings,
+            container=self.workflow_engine.container,
+        )
 
-        resume_text = self.parse_resume(resume_path)
-
-        result = score_company(
-            co,
-            resume_text,
+        res = self.workflow_engine.run(
+            "resume",
+            context=context,
+            company_name=company_name,
+            resume_label=resume_label,
             model=model,
             dry_run=dry_run,
-            ai_gateway=self.ai_gateway,
         )
-        return {
-            "company": co,
-            "resume_path": resume_path,
-            "overall_match_percent": result.get("overall_match_percent", 0),
-            "skill_breakdown": result.get("skill_breakdown", {}),
-            "missing_skills": result.get("missing_skills", []),
-        }
+        return res
 
     def suggest_tailoring(
         self,
@@ -87,38 +89,19 @@ class ResumeService:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Generate keywords, projects, objective highlights, and reordering suggestions for tailoring."""
-        co = self.company_repo.find_by_name(company_name)
+        from app.workflows.context import WorkflowContext
 
-        resume_path = self.resolve_version_path(resume_label)
-        if not resume_path:
-            raise ValueError("Resume path is not set in settings or passed options.")
-
-        resume_text = self.parse_resume(resume_path)
-
-        suggestions = suggest_resume_tailoring(
-            co,
-            resume_text,
-            model=model,
-            dry_run=dry_run,
-            ai_gateway=self.ai_gateway,
+        context = WorkflowContext(
+            settings=self.settings,
+            container=self.workflow_engine.container,
         )
 
-        if not dry_run:
-            from datetime import date
-            note_text = f"tailoring_suggested: {date.today().isoformat()}"
-            if note_text not in co.notes:
-                co.notes.append(note_text)
-            co.last_updated = datetime.now()
-
-            all_companies = self.company_repo.load_all()
-            for idx, item in enumerate(all_companies):
-                if item.dedupe_key() == co.dedupe_key():
-                    all_companies[idx] = co
-                    break
-            self.company_repo.save_all(all_companies)
-
-        return {
-            "company": co,
-            "resume_path": resume_path,
-            "suggestions": suggestions,
-        }
+        res = self.workflow_engine.run(
+            "resume_tailor",
+            context=context,
+            company_name=company_name,
+            resume_label=resume_label,
+            model=model,
+            dry_run=dry_run,
+        )
+        return res

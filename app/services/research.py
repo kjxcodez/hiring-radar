@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any
 from app.models import Company
 from app.repositories import CompanyRepository
-from app.enrich.research import research_company
-from app.utils import RateLimiter, get_http_client
 from app.config import Settings
 from app.ai import AiGateway
 
@@ -12,10 +10,25 @@ from app.ai import AiGateway
 class ResearchService:
     """Service to perform deep AI/Github research on a company."""
 
-    def __init__(self, company_repo: CompanyRepository, settings: Settings, ai_gateway: AiGateway | None = None):
+    def __init__(
+        self,
+        company_repo: CompanyRepository,
+        settings: Settings,
+        ai_gateway: AiGateway | None = None,
+        workflow_engine: Any = None,
+    ):
         self.company_repo = company_repo
         self.settings = settings
         self.ai_gateway = ai_gateway
+        self._workflow_engine = workflow_engine
+
+    @property
+    def workflow_engine(self) -> Any:
+        """Resolve WorkflowEngine instance from CLI container context."""
+        if self._workflow_engine is None:
+            from app.cli.common import get_container
+            self._workflow_engine = get_container().workflow_engine
+        return self._workflow_engine
 
     def research(
         self,
@@ -24,27 +37,20 @@ class ResearchService:
         dry_run: bool = False,
     ) -> Company:
         """Fetch Github profile details and call OpenRouter to perform deeper intelligence queries."""
-        # Retrieve the company using the common repository lookup logic
-        co = self.company_repo.find_by_name(company_name)
+        from app.workflows.context import WorkflowContext
 
-        rate_limiter = RateLimiter()
-        with get_http_client() as client:
-            co = research_company(
-                co,
-                client,
-                rate_limiter,
-                model=model,
-                dry_run=dry_run,
-                ai_gateway=self.ai_gateway,
-            )
+        context = WorkflowContext(
+            settings=self.settings,
+            container=self.workflow_engine.container,
+        )
 
-        if not dry_run:
-            all_companies = self.company_repo.load_all()
-            # Re-merge and save
-            for idx, item in enumerate(all_companies):
-                if item.dedupe_key() == co.dedupe_key():
-                    all_companies[idx] = co
-                    break
-            self.company_repo.save_all(all_companies)
+        res = self.workflow_engine.run(
+            "research",
+            context=context,
+            company_name=company_name,
+            model=model,
+            dry_run=dry_run,
+        )
 
-        return co
+        # Context metadata will contain the researched company
+        return res

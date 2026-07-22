@@ -7,14 +7,11 @@ from loguru import logger
 
 from app.models import Company
 from app.discover import SOURCE_REGISTRY
-from app.discover import remoteok as _remoteok_mod
-from app.discover import wwr as _wwr_mod
 from app.discover.seed import load_seed_slugs
-from app.filters import apply_filters
-from app.saved_search import SavedSearch
 from app.repositories import CompanyRepository, ProfileRepository, SavedSearchRepository
 from app.config import Settings
 from app.profiles import SearchProfile
+from app.saved_search import SavedSearch
 
 
 class DiscoveryService:
@@ -26,11 +23,21 @@ class DiscoveryService:
         profile_repo: ProfileRepository,
         saved_search_repo: SavedSearchRepository,
         settings: Settings,
+        workflow_engine: Any = None,
     ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
         self.saved_search_repo = saved_search_repo
         self.settings = settings
+        self._workflow_engine = workflow_engine
+
+    @property
+    def workflow_engine(self) -> Any:
+        """Resolve WorkflowEngine instance from CLI container context."""
+        if self._workflow_engine is None:
+            from app.cli.common import get_container
+            self._workflow_engine = get_container().workflow_engine
+        return self._workflow_engine
 
     def discover(
         self,
@@ -46,116 +53,47 @@ class DiscoveryService:
         event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
     ) -> dict[str, Any]:
         """Perform discovery from selected sources, merge with existing database, apply filters, and persist."""
-        import sys
-        local_registry = SOURCE_REGISTRY
-        local_load_seed_slugs = load_seed_slugs
+        from app.workflows.progress import WorkflowProgress
+        from app.workflows.context import WorkflowContext
 
-        if "app.cli" in sys.modules:
-            cli_mod = sys.modules["app.cli"]
-            local_registry = getattr(cli_mod, "SOURCE_REGISTRY", local_registry)
-            local_load_seed_slugs = getattr(cli_mod, "load_seed_slugs", local_load_seed_slugs)
+        progress = WorkflowProgress()
+        if event_callback:
+            # Event callback is translated into progress subscription events
+            def _adapt(event_type: str, data: dict[str, Any]) -> None:
+                # Custom mapper to match existing CLI event outputs
+                if event_type == "advance":
+                    # We map advance to query_start or query_success depending on state
+                    msg = data.get("message", "")
+                    if "Querying source" in msg:
+                        src = msg.split(":")[-1].strip()
+                        event_callback("query_start", {"source": src})
+                elif event_type == "complete":
+                    pass
 
-        # 1. Parse sources
-        source_list = [s.strip() for s in sources.split(",") if s.strip()]
-        unknown = [s for s in source_list if s not in local_registry and s not in ("remoteok", "wwr")]
-        if unknown:
-            raise ValueError(f"Unknown source(s): {', '.join(unknown)}")
+            progress.subscribe(_adapt)
 
-        # 2. Load seeds
-        seed_map = local_load_seed_slugs(source_list)
+        context = WorkflowContext(
+            settings=self.settings,
+            container=self.workflow_engine.container,
+            progress=progress,
+        )
 
-        # 3. Query sources
-        all_new: list[Company] = []
-        for src in source_list:
-            if event_callback:
-                event_callback("query_start", {"source": src})
-
-            try:
-                if src == "remoteok":
-                    discovered = _remoteok_mod.discover(limit=limit)
-                elif src == "wwr":
-                    discovered = _wwr_mod.discover(limit=limit)
-                else:
-                    slugs = seed_map.get(src, [])
-                    if not slugs:
-                        if event_callback:
-                            event_callback("no_slugs", {"source": src})
-                        continue
-                    if event_callback:
-                        event_callback("slugs_loaded", {"source": src, "count": len(slugs)})
-                    discovered = local_registry[src](slugs)
-
-                all_new.extend(discovered)
-                if event_callback:
-                    event_callback("query_success", {"source": src, "count": len(discovered)})
-            except Exception as exc:  # noqa: BLE001
-                if event_callback:
-                    event_callback("query_error", {"source": src, "error": str(exc)})
-                logger.warning("{src}: error during discovery — {exc}", src=src, exc=exc)
-
-        # Merge resolved seed companies
-        if seed_companies:
-            all_new.extend(seed_companies)
-
-        # 4. Load existing from repository
-        existing = []
-        if self.company_repo.filepath.exists():
-            try:
-                existing = self.company_repo.load_all()
-                if event_callback:
-                    event_callback("existing_loaded", {"count": len(existing), "filepath": self.company_repo.filepath})
-            except Exception as exc:  # noqa: BLE001
-                if event_callback:
-                    event_callback("existing_load_failed", {"error": str(exc)})
-
-        before_filter_count = len(existing)
-
-        # 5. Merge and deduplicate
-        merged: dict[str, Company] = {c.dedupe_key(): c for c in existing}
-        pre_existing_keys = set(merged.keys())
-
-        for new_co in all_new:
-            key = new_co.dedupe_key()
-            if key in merged:
-                existing_urls = {j.job_url for j in merged[key].jobs}
-                merged[key].jobs.extend(j for j in new_co.jobs if j.job_url not in existing_urls)
-                merged[key].last_updated = new_co.last_updated
-            else:
-                merged[key] = new_co
-
-        # 6. Apply Filters
-        filtered = apply_filters(
-            list(merged.values()),
+        self.workflow_engine.run(
+            "discover",
+            context=context,
+            sources=sources,
+            limit=limit,
             profile=profile,
             remote=remote,
             country=country,
             keyword=keyword,
             exclude=exclude,
             days=days,
+            seed_companies=seed_companies,
+            skip_scrape=True,  # Discover CLI command doesn't perform career scrapings
         )
-        final = filtered[:limit]
 
-        # 7. Save using repository
-        self.company_repo.save_all(final)
-
-        # 8. Compute stats for returned dict
-        new_companies_written = [c for c in final if c.dedupe_key() not in pre_existing_keys]
-        unchanged_count = len(final) - len(new_companies_written)
-        total_new_jobs = sum(len(c.jobs) for c in new_companies_written)
-        total_jobs = sum(len(c.jobs) for c in final)
-
-        return {
-            "source_list": source_list,
-            "all_new_count": len(all_new),
-            "before_filter_count": before_filter_count + len(new_companies_written),
-            "final_count": len(final),
-            "total_jobs": total_jobs,
-            "new_companies_written": len(new_companies_written),
-            "unchanged_companies_count": unchanged_count,
-            "new_jobs": total_new_jobs,
-            "new_companies_list": new_companies_written,
-            "final_companies": final,
-        }
+        return context.metadata["discover_results"]
 
     def save_saved_search(self, name: str, sources: str, limit: int, profile: Optional[str] = None, **kwargs) -> None:
         """Create or update a saved search definition."""
