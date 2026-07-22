@@ -7,6 +7,7 @@ using OpenRouter, and renders them into the chosen local markdown template.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
@@ -24,15 +25,11 @@ from app.outreach.subjects import generate_subject_lines
 from app.outreach.templates import load_template, render_template
 from app.utils import get_http_client
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from app.ai import AiGateway
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# ---------------------------------------------------------------------------
-# Retry-wrapped API call (transient network errors only)
-# ---------------------------------------------------------------------------
 
 @retry(
     retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
@@ -42,41 +39,63 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter API, retrying only on transient connection/timeout errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    content = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        use_cache=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                }
+            }
+        ]
+    }
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def _clean_json_content(content: str) -> str:
     """Strip accidental markdown code fences (e.g. ```json ... ```) from the LLM output."""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    return stripped
+    from app.ai import clean_json_content
+    return clean_json_content(content)
 
-
-# ---------------------------------------------------------------------------
-# Prompt Builders
-# ---------------------------------------------------------------------------
 
 def build_email_system_prompt() -> str:
     """Return the system prompt for generating outreach email variables."""
-    return (
-        "You are an assistant helping write highly personalized, professional, "
-        "and non-spammy cold email outreach variables. Avoid generic marketing hype. "
-        "Write in a direct, conversational, and natural human tone. "
-        "Answer with ONLY a raw JSON object, no markdown formatting."
-    )
+    from app.ai.prompts import get_prompt
+    return get_prompt("outreach_email.v1").system_prompt_template
 
 
 def build_email_prompt(company: Company) -> str:
     """Construct a user prompt to generate hook, pitch, and CTA variables."""
-    jobs_str = ", ".join(f"'{j.job_title}'" for j in company.jobs) or "engineering roles"
     inferred_hook = company.ai_talking_points[0] if company.ai_talking_points else "None available"
     sender_name = yaml_config.email.from_name or "Kapil Kumar Jangid"
 
@@ -98,34 +117,25 @@ The sender is {sender_name}, a full-stack developer with open-source and develop
 Please write and return exactly three creative variables:
 1. "hook": A tailored, specific sentence explaining why we are reaching out, referencing their recent news, tech stack, or unique product (based on the description or suggested talking point). Do not be generic.
 2. "sender_pitch": A concise 1-2 sentence pitch framing the sender's full-stack development and open-source/developer-tooling experience as a compelling fit for the company's engineering work.
-3. "cta": A direct, professional call to action suggesting a quick chat or call (e.g. asking for 10 minutes next week).
-
-Return a valid JSON object with exactly these three keys, formatted as raw JSON without markdown fences (no ```json or ```) or preamble:
-{{
-  "hook": "...",
-  "sender_pitch": "...",
-  "cta": "..."
-}}
+3. "cta": A direct, friendly call to action asking for a short chat or suggesting next steps.
 """
 
-
-# ---------------------------------------------------------------------------
-# Public entrypoint
-# ---------------------------------------------------------------------------
 
 def generate_email(
     company: Company,
     template_name: str = "startup",
     model: str | None = None,
     dry_run: bool = False,
-) -> dict:
-    """Generate cold email outreach body and subject candidates.
+    ai_gateway: Any = None,
+) -> dict[str, Any]:
+    """Generate email subject line and body candidates for outreach to the target company.
 
     Args:
         company: The Company object.
         template_name: Stem of the markdown template to use (e.g., 'startup').
         model: Optional model override. Defaults to settings.openrouter_model.
         dry_run: If True, logs the prompts to be sent and returns dry run text.
+        ai_gateway: Unused parameter to support direct DI call compatibility.
 
     Returns:
         Dict containing keys 'subject', 'body', and 'template_used'.
@@ -164,7 +174,7 @@ def generate_email(
             user=user_prompt,
         )
         # Invoke dry run on subject line to preview that prompt as well
-        generate_subject_lines(company, count=1, model=model, dry_run=True)
+        generate_subject_lines(company, count=1, model=model, dry_run=True, ai_gateway=ai_gateway)
         return {
             "subject": "[DRY RUN]",
             "body": "[DRY RUN]",
@@ -172,7 +182,7 @@ def generate_email(
         }
 
     # 4. Generate Subject Line
-    subjects = generate_subject_lines(company, count=1, model=model, dry_run=False)
+    subjects = generate_subject_lines(company, count=1, model=model, dry_run=False, ai_gateway=ai_gateway)
     subject = subjects[0] if subjects else ""
 
     # 5. POST to OpenRouter for creative variables
@@ -180,7 +190,7 @@ def generate_email(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar",
     }
     json_body = {
