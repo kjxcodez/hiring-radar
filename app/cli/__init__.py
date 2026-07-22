@@ -49,7 +49,8 @@ from app.cli.commands.outreach import (
     morning_brief,
     activity_report,
 )
-from app.cli.commands.tracker import apply_cli, note_cli, followups
+from app.cli.commands.tracker import note_cli, followups
+from app.cli.commands.outreach_crm import apply_callback as apply_cli
 from app.cli.commands.recommendation import recommend_cli
 from app.cli.commands.enrichment import research_cli, score_company_cli, tailor_cli
 

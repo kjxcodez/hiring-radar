@@ -75,10 +75,12 @@ app.command(name="digest")(outreach_digest)
 app.command(name="morning-brief")(morning_brief)
 app.command(name="report")(activity_report)
 
-from app.cli.commands.tracker import apply_cli, note_cli, followups
-app.command(name="apply")(apply_cli)
+from app.cli.commands.tracker import note_cli, followups
 app.command(name="note")(note_cli)
 app.command(name="followups")(followups)
+
+from app.cli.commands.outreach_crm import apply_app
+app.add_typer(apply_app, name="apply")
 
 from app.cli.commands.recommendation import recommend_app, recommend_cli
 app.add_typer(recommend_app, name="recommend")
