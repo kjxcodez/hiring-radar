@@ -23,6 +23,7 @@ from app.workflows.step import (
     UpdateGraphStep,
     LoadCandidateStep,
     RunRecommendationEngineStep,
+    OutreachPrepareStep,
 )
 
 if TYPE_CHECKING:
@@ -206,5 +207,23 @@ class AIRecommendationWorkflow(Workflow):
     def run(self, context: WorkflowContext) -> Any:
         super().run(context)
         return context.metadata.get("recommendations", [])
+
+
+# ===========================================================================
+# 9. Application Preparation Workflow
+# ===========================================================================
+
+class ApplicationPrepareWorkflow(Workflow):
+    """Workflow to generate outreach copy and initialize application schedules."""
+    name = "recommend_outreach"
+    description = "Generate cold outreach materials and schedule CRM events."
+    steps = [
+        OutreachPrepareStep(),
+    ]
+
+    def run(self, context: WorkflowContext) -> Any:
+        super().run(context)
+        return True
+
 
 

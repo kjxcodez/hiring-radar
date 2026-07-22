@@ -821,3 +821,45 @@ class RunRecommendationEngineStep(WorkflowStep):
         context.progress.advance(self.name, "Saving recommendations and finishing.", percent=100)
 
 
+class OutreachPrepareStep(WorkflowStep):
+    """Workflow step executing outreach candidate copy generation and scheduler setup."""
+    name = "OutreachPrepare"
+    description = "Prepare applications and outreach assets for top recommended companies."
+
+    def execute(self, context: Any) -> None:
+        recs = context.container.recommendation_repo.load_recommendations()
+        if not recs:
+            logger.info("OutreachPrepareStep: No recommendations found in repository. Skipping.")
+            return
+
+        # Prepare for top 5 recommendations
+        top_recs = recs[:5]
+        context.progress.advance(self.name, f"Preparing applications for {len(top_recs)} roles...", percent=10)
+
+        # Retrieve/resolve candidate profile
+        profile_cache = context.container.settings.output_dir / "candidate_profile.json"
+        candidate = None
+        if profile_cache.exists():
+            data = context.container.storage.read(profile_cache)
+            from app.recommendation.profile import CandidateProfile
+            candidate = CandidateProfile.model_validate(data)
+
+        for i, rec in enumerate(top_recs, 1):
+            co_name = rec.get("company_name")
+            if not co_name:
+                continue
+
+            context.progress.advance(self.name, f"Processing {co_name} ({i}/{len(top_recs)})...", percent=int(10 + 80 * (i / len(top_recs))))
+            try:
+                context.container.outreach_engine.prepare_application(
+                    company_name=co_name,
+                    candidate=candidate,
+                    force=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("OutreachPrepareStep: Failed to prepare application for {co} — {exc}", co=co_name, exc=exc)
+
+        context.progress.advance(self.name, "Applications successfully prepared.", percent=100)
+
+
+
