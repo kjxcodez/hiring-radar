@@ -37,7 +37,14 @@ class WorkflowStep:
 # ===========================================================================
 
 class DiscoverStep(WorkflowStep):
-    """Step to discover new companies from job boards."""
+    """Step to discover new companies from job boards.
+
+    Routes requests to the async ``DiscoveryCoordinator`` for all providers
+    registered in ``ProviderRegistry`` (Greenhouse, Lever, Ashby, etc.).
+    Sources that are only in the legacy ``SOURCE_REGISTRY`` (e.g. test mocks)
+    are handled via the original synchronous fallback path so existing tests
+    continue to work without modification.
+    """
     name = "Discover"
     description = "Query job boards and seed files for hiring companies."
 
@@ -65,17 +72,55 @@ class DiscoverStep(WorkflowStep):
         source_list = [s.strip() for s in sources.split(",") if s.strip()]
         unknown = [
             s for s in source_list
-            if s not in local_registry and s not in ("remoteok", "wwr") and not s.startswith("mock")
+            if s not in local_registry
+            and s not in ("remoteok", "wwr")
+            and not s.startswith("mock")
         ]
+        if unknown:
+            # Also allow sources registered in ProviderRegistry
+            from app.discovery.registry import ProviderRegistry as _PR
+            unknown = [s for s in unknown if not _PR.has(s)]
         if unknown:
             raise ValueError(f"Unknown source(s): {', '.join(unknown)}")
 
         seed_map = local_load_seed_slugs(source_list)
         all_new: list[Company] = []
-
         context.metadata["source_list"] = source_list
 
-        for src in source_list:
+        # ------------------------------------------------------------------
+        # Route to the async DiscoveryCoordinator for registered providers;
+        # fall back to the synchronous SOURCE_REGISTRY path for test mocks.
+        # ------------------------------------------------------------------
+        from app.discovery.registry import ProviderRegistry
+
+        coordinator_sources = [s for s in source_list if ProviderRegistry.has(s)]
+        legacy_sources = [s for s in source_list if not ProviderRegistry.has(s)]
+
+        # Async coordinator path (production providers)
+        if coordinator_sources:
+            from app.discovery.coordinator import DiscoveryCoordinator
+
+            def _progress_cb(src_name: str, companies: list[Company]) -> None:  # type: ignore[misc]
+                # Progress already emitted per-source above for legacy; no
+                # double-emit for coordinator sources — they log internally.
+                pass
+
+            try:
+                coordinator = DiscoveryCoordinator(
+                    settings=getattr(context, "settings", None),
+                )
+                coordinator_results = coordinator.discover(
+                    sources=coordinator_sources,
+                    slugs_by_source=seed_map,
+                    limit=limit,
+                    progress_callback=_progress_cb,
+                )
+                all_new.extend(coordinator_results)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coordinator: discovery failed — {exc}", exc=exc)
+
+        # Synchronous legacy path (test mocks / SOURCE_REGISTRY-only sources)
+        for src in legacy_sources:
             context.progress.advance(self.name, f"Querying source: {src}", percent=None)
             try:
                 if src == "remoteok":
