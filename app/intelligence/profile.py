@@ -69,3 +69,5 @@ class CompanyIntelligence(BaseModel):
     hiring: HiringProfile = Field(default_factory=HiringProfile)
     github: GitHubProfile = Field(default_factory=GitHubProfile)
     signals: SignalsProfile = Field(default_factory=SignalsProfile)
+    cache_key: Optional[str] = None
+
