@@ -244,14 +244,30 @@ class DiscoveryCoordinator:
                 logger.warning("coordinator: {exc}", exc=exc)
                 return []
 
-            limiter = build_limiter(source)
-
             try:
-                async with limiter:
-                    companies = await provider.discover(
-                        slugs=slugs,
-                        limit=limit,
-                    )
+                container = getattr(self.settings, "container", None) if self.settings else None
+                if container and hasattr(container, "sync_engine") and container.sync_engine:
+                    # Sync and reconcile via SyncEngine
+                    await container.sync_engine.sync_provider(source, slugs, limit)
+                    # Load reconciled companies from the database
+                    all_db = container.company_repo.load_all()
+                    companies = []
+                    for c in all_db:
+                        # Skip soft-deleted companies
+                        if any(n.startswith("company_removed:") for n in c.notes):
+                            continue
+                        if c.ats_platform == source:
+                            companies.append(c)
+                        elif not c.ats_platform and any(j.source == source for j in c.jobs):
+                            companies.append(c)
+                else:
+                    # Fallback to direct provider query (e.g. in simple tests)
+                    limiter = build_limiter(source)
+                    async with limiter:
+                        companies = await provider.discover(
+                            slugs=slugs,
+                            limit=limit,
+                        )
             except asyncio.CancelledError:
                 logger.info(
                     "coordinator: provider '{source}' was cancelled",
@@ -265,6 +281,7 @@ class DiscoveryCoordinator:
                     exc=exc,
                 )
                 return []
+
 
             logger.info(
                 "coordinator: provider '{source}' complete — {n} companies",

@@ -107,3 +107,8 @@ jobs_app.command(name="list")(jobs_list)
 jobs_app.command(name="history")(jobs_history)
 jobs_app.command(name="cancel")(jobs_cancel)
 jobs_app.command(name="retry")(jobs_retry)
+
+# 27. Sync Engine Command Group
+from app.cli.commands.sync import sync_app
+app.add_typer(sync_app, name="sync")
+

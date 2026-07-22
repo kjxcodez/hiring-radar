@@ -69,6 +69,8 @@ class ServiceContainer:
         self._health_service = None
         self._workflow_engine = None
         self._runtime = None
+        self._sync_engine = None
+
 
     @property
     def runtime(self):
@@ -251,3 +253,13 @@ class ServiceContainer:
         self._health_service = None
         self._workflow_engine = None
         self._runtime = None
+        self._sync_engine = None
+
+    @property
+    def sync_engine(self):
+        """Lazy-initialized SyncEngine instance."""
+        if self._sync_engine is None:
+            from app.sync.engine import SyncEngine
+            self._sync_engine = SyncEngine(self, self.settings)
+        return self._sync_engine
+
