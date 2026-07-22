@@ -21,6 +21,8 @@ from app.workflows.step import (
     TailorResumeStep,
     EnrichIntelligenceStep,
     UpdateGraphStep,
+    LoadCandidateStep,
+    RunRecommendationEngineStep,
 )
 
 if TYPE_CHECKING:
@@ -186,4 +188,23 @@ class IntelligenceWorkflow(Workflow):
     def run(self, context: WorkflowContext) -> Any:
         super().run(context)
         return True
+
+
+# ===========================================================================
+# 8. AI Recommendation Workflow
+# ===========================================================================
+
+class AIRecommendationWorkflow(Workflow):
+    """Workflow to load candidate profiles and run AI recommendation engine matching."""
+    name = "recommend_job"
+    description = "Load candidate, execute match engine, and save job recommendations."
+    steps = [
+        LoadCandidateStep(),
+        RunRecommendationEngineStep(),
+    ]
+
+    def run(self, context: WorkflowContext) -> Any:
+        super().run(context)
+        return context.metadata.get("recommendations", [])
+
 

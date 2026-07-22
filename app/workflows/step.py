@@ -800,9 +800,9 @@ class LoadCandidateStep(WorkflowStep):
         context.progress.advance(self.name, "Candidate profile loaded.", percent=100)
 
 
-class RecommendStep(WorkflowStep):
+class RunRecommendationEngineStep(WorkflowStep):
     """Executes recommendation matching and persistence pipeline."""
-    name = "Recommend"
+    name = "RunRecommendationEngine"
     description = "Match candidate features and score jobs."
 
     def execute(self, context: Any) -> None:

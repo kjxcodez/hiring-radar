@@ -108,7 +108,7 @@ class ServiceContainer:
                         pass
                 elif isinstance(event, WorkflowCompleted) and event.workflow_name == "intelligence":
                     try:
-                        self.runtime.submit("recommend")
+                        self.runtime.submit("recommend_job")
                     except Exception:  # noqa: BLE001
                         pass
             self._workflow_engine.register_event_listener(_on_workflow_event)
