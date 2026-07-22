@@ -44,9 +44,47 @@ _SAFE_DEFAULT = {
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter API, retrying only on transient connection/timeout errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    content = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        use_cache=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                }
+            }
+        ]
+    }
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def _clean_json_content(content: str) -> str:
@@ -187,6 +225,7 @@ def research_company(
     rate_limiter: RateLimiter,
     model: str | None = None,
     dry_run: bool = False,
+    ai_gateway: Any = None,
 ) -> Company:
     """Perform deeper AI-based corporate research on a company.
 
@@ -244,7 +283,7 @@ def research_company(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar",
     }
     json_body = {

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # --- HTTP behaviour ---
     request_delay_seconds: float = Field(default=1.5, ge=0.0)
     user_agent: str = (
-        "hiring-radar/0.1 (personal use; github.com/<placeholder>/hiring-radar)"
+        "hiring-radar/0.1 (personal use; github.com/kjxcodez/hiring-radar)"
     )
 
     # --- Logging ---

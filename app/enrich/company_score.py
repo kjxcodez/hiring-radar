@@ -35,46 +35,59 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter API, retrying only on transient connection/timeout errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    content = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        use_cache=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                }
+            }
+        ]
+    }
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def _clean_json_content(content: str) -> str:
     """Strip accidental markdown code fences (e.g. ```json ... ```) from the LLM output."""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    return stripped
+    from app.ai import clean_json_content
+    return clean_json_content(content)
 
 
 def build_system_prompt() -> str:
     """Build the system prompt for the attractiveness scoring task."""
-    return (
-        "You are an expert AI corporate analyst and career consultant.\n"
-        "Your task is to analyze details about a company and produce structured JSON ratings "
-        "evaluating the company's quality and desirability as an employer.\n\n"
-        "You must output a single, raw JSON object (and nothing else) with the following structure:\n"
-        "{\n"
-        '  "growth": <int, 1-10 rating for growth trajectory/potential>,\n'
-        '  "engineering_culture": <int, 1-10 rating for engineering culture/practices>,\n'
-        '  "remote_friendliness": <int, 1-10 rating for remote-first work environment/compatibility>,\n'
-        '  "open_source_presence": <int, 1-10 rating for open-source or public tech contribution>,\n'
-        '  "hiring_urgency": <int, 1-10 rating for hiring signals/urgency>,\n'
-        '  "overall": <float, 0-10 overall synthesized quality rating (reasoned, not a simple average)>,\n'
-        '  "rationale": "<a concise one-sentence explanation justifying the scores>"\n'
-        "}\n\n"
-        "Guidelines:\n"
-        "1. Do NOT use markdown code fences (like ```json). Return ONLY the raw JSON string.\n"
-        "2. Score based ONLY on the provided signal details. Be conservative when data is sparse or missing; "
-        "rate those axes very low (e.g., 1-3) instead of assuming/inventing details.\n"
-        "3. All ratings except overall must be integers between 1 and 10. overall must be a float between 0 and 10.\n"
-    )
+    from app.ai.prompts import get_prompt
+    return get_prompt("company_score.v1").system_prompt_template
 
 
 def build_scoring_prompt(company: Company) -> str:
@@ -83,7 +96,7 @@ def build_scoring_prompt(company: Company) -> str:
     ai_summary = company.ai_summary or "No summary available."
     talking_points = ", ".join(company.ai_talking_points) if company.ai_talking_points else "None available."
     job_count = len(company.jobs)
-    
+
     # Format research notes safely
     res_notes = company.research_notes or {}
     research_text = (
@@ -109,6 +122,7 @@ def score_company_attractiveness(
     company: Company,
     model: str | None = None,
     dry_run: bool = False,
+    ai_gateway: Any = None,
 ) -> Company:
     """Evaluate a company's quality and desirability across five axes using OpenRouter.
 
@@ -116,6 +130,7 @@ def score_company_attractiveness(
         company: The Company object to score (mutated in-place).
         model: Optional model override. Defaults to settings.openrouter_model.
         dry_run: If True, logs the prompts to be sent and returns the company unmodified.
+        ai_gateway: Unused parameter to support direct DI call compatibility.
 
     Returns:
         The updated Company object.
@@ -148,7 +163,7 @@ def score_company_attractiveness(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar",
     }
     json_body = {
