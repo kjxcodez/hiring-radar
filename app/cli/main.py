@@ -112,3 +112,8 @@ jobs_app.command(name="retry")(jobs_retry)
 from app.cli.commands.sync import sync_app
 app.add_typer(sync_app, name="sync")
 
+# 28. Company Intelligence Command Group
+from app.cli.commands.intelligence import intelligence_app
+app.add_typer(intelligence_app, name="intelligence")
+
+

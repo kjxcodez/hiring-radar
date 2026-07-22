@@ -95,7 +95,18 @@ class ServiceContainer:
                 settings=self.settings,
                 ai_gateway=self.ai_gateway,
             )
+            # Automatically queue intelligence background job after discovery runs successfully
+            from app.workflows.events import WorkflowCompleted
+            def _on_workflow_event(event: Any) -> None:
+                if isinstance(event, WorkflowCompleted) and event.workflow_name == "discover":
+                    try:
+                        self.runtime.submit("intelligence")
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._workflow_engine.register_event_listener(_on_workflow_event)
+
         return self._workflow_engine
+
 
     @property
     def discovery_service(self):

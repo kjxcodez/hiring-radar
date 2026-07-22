@@ -19,6 +19,8 @@ from app.workflows.step import (
     ScrapeStep,
     ScoreResumeStep,
     TailorResumeStep,
+    EnrichIntelligenceStep,
+    UpdateGraphStep,
 )
 
 if TYPE_CHECKING:
@@ -166,3 +168,22 @@ class OutreachWorkflow(Workflow):
     def run(self, context: WorkflowContext) -> Any:
         super().run(context)
         return context.metadata.get("outreach_results", {})
+
+
+# ===========================================================================
+# 7. Intelligence Workflow
+# ===========================================================================
+
+class IntelligenceWorkflow(Workflow):
+    """Workflow to enrich company profile properties and build the Knowledge Graph."""
+    name = "intelligence"
+    description = "Enrich companies with business and tech signals, and update Knowledge Graph."
+    steps = [
+        EnrichIntelligenceStep(),
+        UpdateGraphStep(),
+    ]
+
+    def run(self, context: WorkflowContext) -> Any:
+        super().run(context)
+        return True
+

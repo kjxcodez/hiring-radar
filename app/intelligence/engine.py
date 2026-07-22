@@ -44,12 +44,12 @@ class CompanyIntelligenceEngine:
         force: bool = False,
     ) -> Company:
         """Enrich a single company with business intelligence and AI summaries."""
-        # 1. Check cache hit (if fingerprint and jobs match, and not force)
         if company.intelligence and not force:
             # Check if cache is still valid
-            if IntelligenceCache.is_cached(company, None, None):
+            if IntelligenceCache.is_cached(company):
                 logger.info("intelligence: cache hit for '{c}' — skipping.", c=company.name)
                 return company
+
 
         logger.info("intelligence: enriching company '{c}'", c=company.name)
 
@@ -168,9 +168,8 @@ class CompanyIntelligenceEngine:
             github=git_prof,
             signals=sig_prof,
         )
-        new_intel.cache_key = IntelligenceCache.calculate_cache_key(
-            company, website_text=website_text, github_text=github_text
-        )
+        new_intel.cache_key = IntelligenceCache.calculate_cache_key(company)
+
 
         # 7. Update Company model
         company.intelligence = new_intel

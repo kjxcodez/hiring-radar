@@ -699,3 +699,50 @@ class OutreachEmailStep(WorkflowStep):
             "template_used": res.get("template_used", template),
         }
         return context.metadata["outreach_results"]
+
+
+class EnrichIntelligenceStep(WorkflowStep):
+    """Enriches companies with business, engineering, hiring, and signal metrics."""
+    name = "EnrichIntelligence"
+    description = "Enrich companies with business and tech signals."
+
+    def execute(self, context: Any) -> None:
+        companies = context.repositories.company_repo.load_all()
+        if not companies:
+            return
+        engine = context.container.intelligence_engine
+        force = context.metadata.get("force", False)
+        
+        total = len(companies)
+        for idx, co in enumerate(companies):
+            context.progress.advance(
+                self.name,
+                f"Enriching {co.name}",
+                percent=(idx / total) * 100 if total else 100,
+                co_name=co.name,
+                idx=idx,
+                total=total,
+            )
+            engine.enrich_company(co, force=force)
+        
+        context.repositories.company_repo.save_all(companies)
+
+
+class UpdateGraphStep(WorkflowStep):
+    """Rebuilds the corporate Knowledge Graph nodes and edges and saves to disk."""
+    name = "UpdateGraph"
+    description = "Rebuild and persist the Knowledge Graph index."
+
+    def execute(self, context: Any) -> None:
+        from app.intelligence.graph import KnowledgeGraph
+        companies = context.repositories.company_repo.load_all()
+        
+        context.progress.advance(self.name, "Rebuilding Knowledge Graph index...", percent=50)
+        graph = KnowledgeGraph()
+        graph.rebuild_graph(companies)
+        
+        graph_path = context.settings.output_dir / "knowledge_graph.json"
+        context.progress.advance(self.name, "Saving Knowledge Graph index to disk...", percent=90)
+        graph.save(graph_path, context.repositories.company_repo.storage)
+        context.progress.advance(self.name, "Knowledge Graph update complete.", percent=100)
+
