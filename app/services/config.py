@@ -70,6 +70,8 @@ class ServiceContainer:
         self._workflow_engine = None
         self._runtime = None
         self._sync_engine = None
+        self._intelligence_engine = None
+
 
 
     @property
@@ -254,6 +256,7 @@ class ServiceContainer:
         self._workflow_engine = None
         self._runtime = None
         self._sync_engine = None
+        self._intelligence_engine = None
 
     @property
     def sync_engine(self):
@@ -262,4 +265,13 @@ class ServiceContainer:
             from app.sync.engine import SyncEngine
             self._sync_engine = SyncEngine(self, self.settings)
         return self._sync_engine
+
+    @property
+    def intelligence_engine(self):
+        """Lazy-initialized CompanyIntelligenceEngine instance."""
+        if self._intelligence_engine is None:
+            from app.intelligence.engine import CompanyIntelligenceEngine
+            self._intelligence_engine = CompanyIntelligenceEngine(self, self.settings)
+        return self._intelligence_engine
+
 
