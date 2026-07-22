@@ -11,15 +11,23 @@ from app.resume.score import score_company
 from app.resume.suggestions import suggest_resume_tailoring
 from app.resume.versions import resolve_resume_version, list_resume_versions
 from app.config import Settings
+from app.ai import AiGateway
 
 
 class ResumeService:
     """Service to score resumes and generate tailored resumes/suggestions."""
 
-    def __init__(self, company_repo: CompanyRepository, profile_repo: ProfileRepository, settings: Settings):
+    def __init__(
+        self,
+        company_repo: CompanyRepository,
+        profile_repo: ProfileRepository,
+        settings: Settings,
+        ai_gateway: AiGateway | None = None,
+    ):
         self.company_repo = company_repo
         self.profile_repo = profile_repo
         self.settings = settings
+        self.ai_gateway = ai_gateway
 
     def list_versions(self) -> list[str]:
         """Return a sorted list of all available resume stems in the resumes/ folder."""
@@ -56,7 +64,13 @@ class ResumeService:
 
         resume_text = self.parse_resume(resume_path)
 
-        result = score_company(co, resume_text, model=model, dry_run=dry_run)
+        result = score_company(
+            co,
+            resume_text,
+            model=model,
+            dry_run=dry_run,
+            ai_gateway=self.ai_gateway,
+        )
         return {
             "company": co,
             "resume_path": resume_path,
@@ -81,7 +95,13 @@ class ResumeService:
 
         resume_text = self.parse_resume(resume_path)
 
-        suggestions = suggest_resume_tailoring(co, resume_text, model=model, dry_run=dry_run)
+        suggestions = suggest_resume_tailoring(
+            co,
+            resume_text,
+            model=model,
+            dry_run=dry_run,
+            ai_gateway=self.ai_gateway,
+        )
 
         if not dry_run:
             from datetime import date

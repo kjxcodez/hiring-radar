@@ -11,6 +11,7 @@ from app.repositories import (
     SavedSearchRepository,
 )
 from app.storage import JsonStorage
+from app.ai import AiGateway
 
 
 def _resolve_config_value(config_val: Any, cli_val: Any) -> Any:
@@ -42,6 +43,9 @@ class ServiceContainer:
 
         # Storage layer
         self.storage = JsonStorage()
+
+        # AI Infrastructure
+        self.ai_gateway = AiGateway(self.settings)
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json", storage=self.storage)
@@ -84,7 +88,8 @@ class ServiceContainer:
             from app.services.scraping import ScrapingService
             self._scraping_service = ScrapingService(
                 company_repo=self.company_repo,
-                settings=self.settings
+                settings=self.settings,
+                ai_gateway=self.ai_gateway
             )
         return self._scraping_service
 
@@ -95,7 +100,8 @@ class ServiceContainer:
             from app.services.research import ResearchService
             self._research_service = ResearchService(
                 company_repo=self.company_repo,
-                settings=self.settings
+                settings=self.settings,
+                ai_gateway=self.ai_gateway
             )
         return self._research_service
 
@@ -107,7 +113,8 @@ class ServiceContainer:
             self._resume_service = ResumeService(
                 company_repo=self.company_repo,
                 profile_repo=self.profile_repo,
-                settings=self.settings
+                settings=self.settings,
+                ai_gateway=self.ai_gateway
             )
         return self._resume_service
 
@@ -119,7 +126,8 @@ class ServiceContainer:
             self._outreach_service = OutreachService(
                 company_repo=self.company_repo,
                 settings=self.settings,
-                yaml_config=self.yaml_config
+                yaml_config=self.yaml_config,
+                ai_gateway=self.ai_gateway
             )
         return self._outreach_service
 
@@ -186,6 +194,9 @@ class ServiceContainer:
 
         # Storage layer
         self.storage = JsonStorage()
+
+        # AI Infrastructure
+        self.ai_gateway = AiGateway(self.settings)
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json", storage=self.storage)

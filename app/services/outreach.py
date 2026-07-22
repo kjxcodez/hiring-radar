@@ -9,15 +9,23 @@ from app.outreach.email import generate_email
 from app.outreach.mailer import send_email, send_test_email
 from app.config import Settings, YamlConfig
 from app.exceptions import CompanyNotFoundError
+from app.ai import AiGateway
 
 
 class OutreachService:
     """Service to handle generating, marking, and sending outreach emails."""
 
-    def __init__(self, company_repo: CompanyRepository, settings: Settings, yaml_config: YamlConfig):
+    def __init__(
+        self,
+        company_repo: CompanyRepository,
+        settings: Settings,
+        yaml_config: YamlConfig,
+        ai_gateway: AiGateway | None = None,
+    ):
         self.company_repo = company_repo
         self.settings = settings
         self.yaml_config = yaml_config
+        self.ai_gateway = ai_gateway
 
     def generate_outreach_draft(
         self,
@@ -28,7 +36,13 @@ class OutreachService:
     ) -> dict[str, Any]:
         """Generate email subject line and body candidates for a company."""
         co = self.company_repo.find_by_name(company_name)
-        res = generate_email(co, template_name=template, model=model, dry_run=dry_run)
+        res = generate_email(
+            co,
+            template_name=template,
+            model=model,
+            dry_run=dry_run,
+            ai_gateway=self.ai_gateway,
+        )
         recipient = co.recruiter_email or (co.generic_emails[0] if co.generic_emails else "(no email found)")
 
         return {
@@ -65,3 +79,4 @@ class OutreachService:
                 all_companies[idx] = co
                 break
         self.company_repo.save_all(all_companies)
+        

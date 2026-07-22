@@ -10,11 +10,13 @@ from app.scraper.company import scrape_company_page
 from app.scraper.contacts import extract_contacts
 from app.utils import RateLimiter, get_http_client
 from app.config import Settings
+from app.ai import AiGateway
 
 class ScrapingService:
-    def __init__(self, company_repo: CompanyRepository, settings: Settings):
+    def __init__(self, company_repo: CompanyRepository, settings: Settings, ai_gateway: AiGateway | None = None):
         self.company_repo = company_repo
         self.settings = settings
+        self.ai_gateway = ai_gateway
 
     def scrape(
         self,
@@ -138,7 +140,7 @@ class ScrapingService:
                 rate_limiter.wait("https://openrouter.ai")
 
             try:
-                _enrich_ai(co, model=model, dry_run=dry_run)
+                _enrich_ai(co, model=model, dry_run=dry_run, ai_gateway=self.ai_gateway)
                 if any(n.startswith("enrich_failed") for n in co.notes):
                     n_failures += 1
                 else:

@@ -6,14 +6,16 @@ from app.repositories import CompanyRepository
 from app.enrich.research import research_company
 from app.utils import RateLimiter, get_http_client
 from app.config import Settings
+from app.ai import AiGateway
 
 
 class ResearchService:
     """Service to perform deep AI/Github research on a company."""
 
-    def __init__(self, company_repo: CompanyRepository, settings: Settings):
+    def __init__(self, company_repo: CompanyRepository, settings: Settings, ai_gateway: AiGateway | None = None):
         self.company_repo = company_repo
         self.settings = settings
+        self.ai_gateway = ai_gateway
 
     def research(
         self,
@@ -27,7 +29,14 @@ class ResearchService:
 
         rate_limiter = RateLimiter()
         with get_http_client() as client:
-            co = research_company(co, client, rate_limiter, model=model, dry_run=dry_run)
+            co = research_company(
+                co,
+                client,
+                rate_limiter,
+                model=model,
+                dry_run=dry_run,
+                ai_gateway=self.ai_gateway,
+            )
 
         if not dry_run:
             all_companies = self.company_repo.load_all()
