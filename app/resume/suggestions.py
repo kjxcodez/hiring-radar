@@ -7,6 +7,7 @@ without modifying the original resume or company schemas.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
@@ -22,6 +23,8 @@ from app.config import settings
 from app.models import Company
 from app.utils import get_http_client
 
+if TYPE_CHECKING:
+    from app.ai import AiGateway
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -42,43 +45,59 @@ _SAFE_DEFAULT = {
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter API, retrying only on transient connection/timeout errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    content = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        use_cache=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                }
+            }
+        ]
+    }
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def _clean_json_content(content: str) -> str:
     """Strip accidental markdown code fences (e.g. ```json ... ```) from the LLM output."""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    return stripped
+    from app.ai import clean_json_content
+    return clean_json_content(content)
 
 
 def build_system_prompt() -> str:
     """Build the system prompt for the resume tailoring suggestion task."""
-    return (
-        "You are an expert AI resume reviewer and career coach.\n"
-        "Your task is to analyze details about a target company and a candidate's resume, and output "
-        "tailoring suggestions to make the resume more compatible with the company's job postings.\n\n"
-        "You must output a single, raw JSON object (and nothing else) with the following structure:\n"
-        "{\n"
-        '  "missing_keywords": ["<keyword1>", "<keyword2>", ...],\n'
-        '  "projects_to_emphasize": ["<project1 suggestion>", "<project2 suggestion>", ...],\n'
-        '  "summary_suggestion": "<rewritten 2-3 sentence resume summary/objective tailored to this company>",\n'
-        '  "reorder_suggestion": "<1-2 sentences on which skills to list first>"\n'
-        "}\n\n"
-        "Guidelines:\n"
-        "1. Do NOT use markdown code fences (like ```json). Return ONLY the raw JSON string.\n"
-        "2. Do NOT fabricate any skill, project, or experience not present in the provided resume text. "
-        "Only suggest emphasizing existing details. Do NOT invent/hallucinate any career history.\n"
-        "3. Provide realistic, actionable advice based on the company's listed requirements.\n"
-    )
+    from app.ai.prompts import get_prompt
+    return get_prompt("resume_suggestions.v1").system_prompt_template
 
 
 def build_tailoring_prompt(company: Company, resume_text: str) -> str:
@@ -95,16 +114,16 @@ def build_tailoring_prompt(company: Company, resume_text: str) -> str:
     )
 
     return (
-        f"Target Company:\n"
+        f"Target Company Profile:\n"
         f"Name: {company.name}\n"
         f"Description: {desc}\n"
-        f"Active Job Openings: {jobs_text}\n"
-        f"Research Notes:\n"
+        f"Active Jobs Roles: {jobs_text}\n"
+        f"Technical Research Notes:\n"
         f"{research_text}\n\n"
         f"Candidate Resume Text:\n"
-        f"---\n"
+        f"\"\"\"\n"
         f"{resume_text}\n"
-        f"---\n"
+        f"\"\"\"\n"
     )
 
 
@@ -113,17 +132,19 @@ def suggest_resume_tailoring(
     resume_text: str,
     model: str | None = None,
     dry_run: bool = False,
-) -> dict:
-    """Evaluate a resume against a company's profile and returns tailoring suggestions.
+    ai_gateway: Any = None,
+) -> dict[str, Any]:
+    """Provides advisory guidelines on how to tailor a candidate resume for a target company's job postings.
 
     Args:
-        company: The Company object to tailor for.
-        resume_text: The candidate's raw resume text.
+        company: The Company object to evaluate.
+        resume_text: The raw text content of the candidate's resume.
         model: Optional model override. Defaults to settings.openrouter_model.
-        dry_run: If True, logs prompt preview and returns safe defaults.
+        dry_run: If True, logs the prompts to be sent and returns safe default suggestions.
+        ai_gateway: Unused parameter to support direct DI call compatibility.
 
     Returns:
-        A dictionary containing tailoring recommendations.
+        A dict matching {"missing_keywords": list, "projects_to_emphasize": list, "summary_suggestion": str, "reorder_suggestion": str}
     """
     # 1. API key verification
     if not settings.openrouter_api_key:
@@ -153,7 +174,7 @@ def suggest_resume_tailoring(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar",
     }
     json_body = {

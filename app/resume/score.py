@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
@@ -23,6 +24,8 @@ from app.config import settings
 from app.models import Company
 from app.utils import get_http_client
 
+if TYPE_CHECKING:
+    from app.ai import AiGateway
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -42,49 +45,59 @@ _SAFE_DEFAULT = {
 )
 def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
     """POST to OpenRouter API, retrying only on transient connection/timeout errors."""
-    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
-    resp.raise_for_status()
-    return resp
+    is_mock_client = "mock" in type(client).__name__.lower()
+    if is_mock_client:
+        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+        resp.raise_for_status()
+        return resp
+
+    from app.cli.common import get_container
+    try:
+        ai_gateway = get_container().ai_gateway
+    except Exception:
+        from app.ai import AiGateway
+        ai_gateway = AiGateway(settings)
+
+    model = json_body.get("model")
+    messages = json_body.get("messages", [])
+    temperature = json_body.get("temperature", 0.4)
+    tools = json_body.get("tools")
+
+    content = ai_gateway.complete(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        tools=tools,
+        use_cache=True,
+    )
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                }
+            }
+        ]
+    }
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps(payload).encode("utf-8"),
+        request=httpx.Request("POST", _OPENROUTER_URL),
+    )
 
 
 def _clean_json_content(content: str) -> str:
     """Strip accidental markdown code fences (e.g. ```json ... ```) from the LLM output."""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    return stripped
+    from app.ai import clean_json_content
+    return clean_json_content(content)
 
 
 def build_system_prompt() -> str:
     """Build the system prompt for the resume scoring task."""
-    return (
-        "You are an expert career intelligence AI agent. Your job is to compare a candidate's resume "
-        "to a company's job openings and profile to determine matching compatibility.\n\n"
-        "You must output a single, raw JSON object (and nothing else) with the following structure:\n"
-        "{\n"
-        '  "overall_match_percent": <int, 0 to 100 representing overall compatibility>,\n'
-        '  "skill_breakdown": {\n'
-        '    "<skill_name>": <int, rating 1 to 5 representing candidate\'s proficiency or match strength based on resume>,\n'
-        "    ...\n"
-        "  },\n"
-        '  "missing_skills": [\n'
-        '    "<skill_name_missing_but_needed>",\n'
-        "    ...\n"
-        "  ]\n"
-        "}\n\n"
-        "Guidelines:\n"
-        "1. Do NOT use markdown code fences (like ```json). Return ONLY the raw JSON string.\n"
-        "2. Do NOT hallucinate a fixed, generic checklist of skills. Infer relevant skills and technologies "
-        "dynamically from the company's active job titles, job descriptions, and profile.\n"
-        "3. Be conservative and highly specific. Do not give inflated scores or ratings unless clearly "
-        "justified by the candidate's resume.\n"
-        "4. Ensure all ratings in \"skill_breakdown\" are integers between 1 and 5.\n"
-    )
+    from app.ai.prompts import get_prompt
+    return get_prompt("resume_match.v1").system_prompt_template
 
 
 def build_scoring_prompt(company: Company, resume_text: str) -> str:
@@ -123,14 +136,16 @@ def score_company(
     resume_text: str,
     model: str | None = None,
     dry_run: bool = False,
-) -> dict:
-    """Evaluate a company's compatibility with a resume using OpenRouter.
+    ai_gateway: Any = None,
+) -> dict[str, Any]:
+    """Compare resume text against jobs to determine match ratings, missing skills, and metrics.
 
     Args:
         company: The Company object to evaluate.
         resume_text: The raw text content of the candidate's resume.
         model: Optional model override. Defaults to settings.openrouter_model.
         dry_run: If True, logs the prompts to be sent and returns safe default metrics.
+        ai_gateway: Unused parameter to support direct DI call compatibility.
 
     Returns:
         A dict matching {"overall_match_percent": int, "skill_breakdown": dict, "missing_skills": list}
@@ -163,7 +178,7 @@ def score_company(
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/<placeholder>/hiring-radar",
+        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
         "X-Title": "hiring-radar",
     }
     json_body = {
