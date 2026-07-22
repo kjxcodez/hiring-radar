@@ -6,9 +6,11 @@ No I/O, HTTP, or file logic lives here — pure data shapes only.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Optional
+from app.intelligence.profile import CompanyIntelligence
 
 from pydantic import BaseModel, ConfigDict, Field
+
 
 
 class JobPosting(BaseModel):
@@ -74,8 +76,7 @@ class Company(BaseModel):
     research_notes: dict[str, str] = Field(default_factory=dict)
     company_scores: dict[str, int] = Field(default_factory=dict)
     company_score_overall: float | None = None
-
-
+    intelligence: Optional[CompanyIntelligence] = None
 
     # --- Timestamps ---
     discovered_at: datetime
