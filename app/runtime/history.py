@@ -23,10 +23,13 @@ class ExecutionHistory:
 
     def load_all(self) -> dict[str, Execution]:
         """Load and deserialize all historical executions from JSON file."""
-        data = self.storage.read(self.filepath)
-        if not data:
+        try:
+            data = self.storage.read(self.filepath)
+            if not isinstance(data, dict):
+                return {}
+            return {k: Execution(**v) for k, v in data.items()}
+        except Exception:
             return {}
-        return {k: Execution(**v) for k, v in data.items()}
 
     def save_all(self, executions: dict[str, Execution]) -> None:
         """Serialize and atomically save executions list to JSON file."""

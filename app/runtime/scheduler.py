@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 from pydantic import BaseModel, Field
 from app.storage.json_storage import JsonStorage
 
@@ -84,10 +84,13 @@ class Scheduler:
 
     def load_schedules(self) -> dict[str, ScheduledJob]:
         """Load schedule definitions from storage."""
-        data = self.storage.read(self.schedule_file)
-        if not data:
+        try:
+            data = self.storage.read(self.schedule_file)
+            if not isinstance(data, dict):
+                return {}
+            return {k: ScheduledJob(**v) for k, v in data.items()}
+        except Exception:
             return {}
-        return {k: ScheduledJob(**v) for k, v in data.items()}
 
     def save_schedules(self, schedules: dict[str, ScheduledJob]) -> None:
         """Atomically persist schedule definitions to storage."""
