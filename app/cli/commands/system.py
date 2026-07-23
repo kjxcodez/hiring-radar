@@ -116,7 +116,7 @@ def show_repl_help() -> None:
     from app.cli.common import console
 
     table = Table(title="Hiring Radar AI Agent Help Commands", show_header=True, header_style="bold magenta")
-    table.add_column("Category", style="cyan", no_wrap=True)
+    table.add_column("Category / Command", style="cyan", no_wrap=True)
     table.add_column("Example Prompt / Description", style="white")
 
     table.add_row("Job Search", '"recommend jobs matching my profile"\n"search Lever for software engineers"')
@@ -125,7 +125,19 @@ def show_repl_help() -> None:
     table.add_row("Applications CRM", '"list my applications"\n"prepare outreach drafts for Vercel"')
     table.add_row("Monitoring Alerts", '"run change detection check"\n"show daily digest events"')
     table.add_row("Session Memory", '"what was my last question?"\n"recommend more jobs like the ones discussed"')
-    table.add_row("General", '"help" (shows this table)\n"exit" / "quit" (terminates session)')
+    table.add_row("Local Shell Commands", '"/help" - Show this help menu\n'
+                                           '"/clear" - Clear screen\n'
+                                           '"/history" - View query history\n'
+                                           '"/status" - Run agent doctor check\n'
+                                           '"/providers" - List LLM providers\n'
+                                           '"/models" - List models\n'
+                                           '"/cache" - View cache stats\n'
+                                           '"/usage" - View token consumption\n'
+                                           '"/routing" - Display routing policy\n'
+                                           '"/reasoning" - Toggle debug reasoning\n'
+                                           '"/theme <name>" - Switch active theme\n'
+                                           '"/export <format>" - Export transcript (md, json, html)\n'
+                                           '"/exit" - Quit terminal session')
 
     console.print(Panel(table, border_style="cyan"))
 
@@ -405,54 +417,164 @@ def agent(
     from app.agent.logging import AgentLoggingContext
     from app.agent.cards import print_tool_result_card
     from app.config import yaml_config
+    
+    # Import prompt_toolkit components
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.completion import WordCompleter
+    from prompt_toolkit.formatted_text import HTML
 
     with AgentLoggingContext(show_debug_logs=yaml_config.agent.show_debug_logs):
-        # 2. Initialize Session
+        # Initialize Session
         session = AgentSession()
         session.show_reasoning = show_reasoning
         conversation_history: list[dict] = []
 
-        # 3. Render Dashboard
+        # Render Startup Dashboard
         show_agent_dashboard(session)
 
-        # 4. Instantiate Progress Renderer
+        # Initialize persistent history session and autocompleter
+        history_file = Path.home() / ".hiring_radar_history"
+        prompt_session = PromptSession(history=FileHistory(str(history_file)))
+        
+        # Build autocomplete suggestions
+        container = get_container()
+        companies_list = [c.name for c in container.company_repo.load_all()] if hasattr(container, "company_repo") else []
+        jobs_list = []
+        try:
+            jobs_list = [j.title for c in container.company_repo.load_all() for j in c.jobs] if hasattr(container, "company_repo") else []
+        except Exception:
+            pass
+        
+        slash_commands = [
+            "/help", "/clear", "/history", "/status", "/providers", "/models",
+            "/cache", "/usage", "/routing", "/theme", "/export", "/exit"
+        ]
+        themes_list = ["default", "dracula", "nord", "solarized", "minimal"]
+        providers_list = ["google", "openrouter", "openai", "anthropic", "groq", "deepseek", "ollama"]
+        
+        completer_words = slash_commands + companies_list + jobs_list + themes_list + providers_list
+        word_completer = WordCompleter(completer_words, ignore_case=True)
+
         renderer = AgentProgressRenderer(
             show_progress=yaml_config.agent.show_progress,
             animations=yaml_config.agent.animations
         )
-        container = get_container()
         container.workflow_engine.register_event_listener(renderer.handle_event)
 
+        # Print premium shell banner
+        from rich.panel import Panel
+        from rich.align import Align
+        header_text = (
+            "[bold purple]⚡ Hiring Radar Command Shell[/bold purple]\n"
+            f"Workspace: [cyan]{Path.cwd().name}[/cyan] | "
+            f"Active Provider: [green]{yaml_config.llm.default_provider}[/green] | "
+            f"Theme: [yellow]{yaml_config.ui.theme}[/yellow]\n"
+            "Type [bold cyan]/help[/bold cyan] for commands list. Press [bold cyan]Tab[/bold cyan] for autocompletion."
+        )
+        console.print(Panel(Align.center(header_text), border_style="purple"))
+
         while True:
-            # Run state validation and raise warnings if inconsistencies exist
             from app.agent.state_validator import validate_system_state
             warnings = validate_system_state()
             for w in warnings:
                 console.print(f"[bold yellow]⚠️ System State Warning:[/bold yellow] {w}")
 
+            active_p = yaml_config.llm.default_provider
+            active_theme = yaml_config.ui.theme
+            prompt_html = HTML(
+                f"<ansicyan><b>Hiring Radar</b></ansicyan> | "
+                f"<ansigreen>{active_p}</ansigreen> | "
+                f"<ansiyellow>{active_theme}</ansiyellow>\n"
+                f"<ansicyan><b>&gt; </b></ansicyan>"
+            )
+
             try:
-                user_msg = Prompt.ask("\n[bold cyan]Agent[/bold cyan]")
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[yellow]Session ended.[/yellow]")
+                user_msg = prompt_session.prompt(
+                    prompt_html,
+                    completer=word_completer,
+                    auto_suggest=AutoSuggestFromHistory(),
+                    complete_while_typing=True
+                )
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Prompt cancelled. Type /exit to quit.[/yellow]")
+                continue
+            except EOFError:
+                console.print("\n[yellow]Goodbye![/yellow]")
                 break
 
             cleaned_msg = user_msg.strip()
             if not cleaned_msg:
                 continue
 
-            if cleaned_msg.lower() in ("exit", "quit"):
-                console.print("[yellow]Goodbye![/yellow]")
-                break
+            # Process Slash Commands
+            if cleaned_msg.startswith("/"):
+                cmd_parts = cleaned_msg.split()
+                cmd = cmd_parts[0].lower()
+                arg = cmd_parts[1] if len(cmd_parts) > 1 else ""
 
-            if cleaned_msg.lower() == "help":
-                show_repl_help()
-                continue
-
-            if cleaned_msg.lower() in ("cancel", "stop"):
-                console.print("[yellow]Prompt reset. Conversation memory cleared.[/yellow]")
-                conversation_history.clear()
-                session.clear()
-                continue
+                if cmd == "/exit":
+                    console.print("[yellow]Goodbye![/yellow]")
+                    break
+                elif cmd == "/clear":
+                    console.clear()
+                    continue
+                elif cmd == "/help":
+                    show_repl_help()
+                    continue
+                elif cmd == "/history":
+                    for idx, entry in enumerate(prompt_session.history.get_strings(), 1):
+                        console.print(f"{idx}: {entry}")
+                    continue
+                elif cmd == "/providers":
+                    agent_providers()
+                    continue
+                elif cmd == "/models":
+                    agent_models()
+                    continue
+                elif cmd == "/cache":
+                    agent_cache()
+                    continue
+                elif cmd == "/usage":
+                    agent_usage()
+                    continue
+                elif cmd == "/routing":
+                    agent_routing()
+                    continue
+                elif cmd == "/status":
+                    agent_doctor()
+                    continue
+                elif cmd == "/reasoning":
+                    session.show_reasoning = not session.show_reasoning
+                    status_str = "ENABLED" if session.show_reasoning else "DISABLED"
+                    console.print(f"[green]Reasoning visualization is now {status_str}.[/green]")
+                    continue
+                elif cmd == "/theme":
+                    if arg in themes_list:
+                        yaml_config.ui.theme = arg
+                        console.print(f"[green]Theme switched to {arg}![/green]")
+                    else:
+                        console.print(f"[red]Invalid theme. Choose from: {', '.join(themes_list)}[/red]")
+                    continue
+                elif cmd == "/export":
+                    if arg in ["markdown", "md", "json", "html"]:
+                        ext = "md" if arg in ["markdown", "md"] else arg
+                        out_file = Path(f"transcript_export.{ext}")
+                        from app.ui.export import export_transcript_markdown, export_transcript_json, export_transcript_html
+                        if ext == "md":
+                            export_transcript_markdown(conversation_history, out_file)
+                        elif ext == "json":
+                            export_transcript_json(conversation_history, out_file)
+                        else:
+                            export_transcript_html(conversation_history, out_file)
+                        console.print(f"[green]Transcript exported successfully to {out_file}![/green]")
+                    else:
+                        console.print("[red]Invalid export format. Choose from: markdown, json, html.[/red]")
+                    continue
+                else:
+                    console.print(f"[red]Unknown slash command: {cmd}. Type /help for list.[/red]")
+                    continue
 
             # Record last question in session memory
             session.last_question = cleaned_msg
@@ -460,17 +582,30 @@ def agent(
             user_input_to_send = cleaned_msg
             while True:
                 try:
-                    # Run the reasoning loop with live progress rendering
-                    with renderer:
+                    from app.ui.status import LiveStatus
+                    import time
+                    
+                    from app.ui.events import ToolTimelineTracker
+                    tracker = ToolTimelineTracker()
+                    
+                    live_status = LiveStatus(spinner="dots", style="bold cyan")
+                    with live_status.run("Analyzing and planning query..."):
+                        t_round_start = time.time()
                         res = run_agent_turn(
                             user_input_to_send,
                             conversation_history,
                             model=model,
                             session=session
                         )
+                        
+                    if res.get("tool_calls_made"):
+                        for tc_name in res["tool_calls_made"]:
+                            tracker.start_tool(tc_name)
+                            time.sleep(0.1)
+                            tracker.end_tool(tc_name, success=True)
+                            
                     conversation_history = res["updated_history"]
                 except KeyboardInterrupt:
-                    # Cancel active workflows if any
                     active_ids = list(container.workflow_engine.active_contexts.keys())
                     for context_id in active_ids:
                         container.workflow_engine.cancel(context_id)
@@ -504,14 +639,14 @@ def agent(
                         })
                         container.memory_repo.save(mem)
                         
-                        # Track tool call in session
                         session.record_tool_call(tool_name, args)
 
                         try:
+                            tracker.start_tool(tool_name)
                             with renderer:
                                 tool_result = execute_approved_tool(tool_name, args)
+                            tracker.end_tool(tool_name, success=True)
                             
-                            # Print Rich Card representation if enabled
                             print_tool_result_card(tool_name, tool_result)
                         except KeyboardInterrupt:
                             active_ids = list(container.workflow_engine.active_contexts.keys())
@@ -523,6 +658,7 @@ def agent(
                             import loguru
                             loguru.logger.exception("Tool execution failed")
                             tool_result = {"error": f"Tool execution failed: {exc}"}
+                            tracker.end_tool(tool_name, success=False)
                     else:
                         mem.setdefault("past_decisions", [])
                         mem["past_decisions"].append({
@@ -532,7 +668,6 @@ def agent(
                         container.memory_repo.save(mem)
                         tool_result = {"error": "User declined to approve this action."}
 
-                    # Append tool result message
                     tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc_id,
@@ -546,5 +681,12 @@ def agent(
                 else:
                     # Final response generated
                     console.print()
-                    console.print(Markdown(res["reply"]))
+                    if yaml_config.ui.streaming or yaml_config.ui.typing_effect:
+                        words = res["reply"].split(" ")
+                        for idx, w in enumerate(words):
+                            console.print(w, end=" ", flush=True)
+                            time.sleep(0.01)
+                        console.print()
+                    else:
+                        console.print(Markdown(res["reply"]))
                     break

@@ -96,6 +96,20 @@ class AgentConfig(BaseModel):
     verbosity: str = "normal"
 
 
+class UIConfig(BaseModel):
+    """Configuration for CLI UI and visual aesthetics."""
+    theme: str = "default"
+    animations: bool = True
+    streaming: bool = True
+    markdown: bool = True
+    progress: bool = True
+    status_updates: bool = True
+    show_execution_time: bool = True
+    compact_mode: bool = False
+    unicode: bool = True
+    typing_effect: bool = False
+
+
 class LLMConfig(BaseModel):
     """Configuration for LLM Orchestration."""
     default_provider: str = "google"
@@ -115,6 +129,7 @@ class YamlConfig(BaseModel):
     email: EmailConfig = Field(default_factory=EmailConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
 
