@@ -11,3 +11,4 @@ python-dotenv
 pyyaml
 pypdf
 mcp
+prompt-toolkit
