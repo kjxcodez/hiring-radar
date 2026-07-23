@@ -19,6 +19,8 @@ output/*.json
 output/logs/*
 output/*
 
+logs/*
+
 # OS noise
 .DS_Store
 Thumbs.db

@@ -75,7 +75,10 @@ def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> ht
     )
 
 
-def build_agent_system_prompt() -> str:
+from app.agent.session import AgentSession
+
+
+def build_agent_system_prompt(session: AgentSession | None = None) -> str:
     """Return the system instructions for the AI Agent planner loop."""
     from app.agent.memory import load_memory
     from app.ai.prompts import get_prompt
@@ -86,10 +89,22 @@ def build_agent_system_prompt() -> str:
     prefs_summary = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) if prefs else "None"
     rejected_summary = ", ".join(rejected) if rejected else "None"
 
-    return get_prompt("agent.v1").system_prompt_template.format(
+    session_context = ""
+    if session:
+        resume_status = f"Loaded from: {session.loaded_resume.name}" if session.loaded_resume else "None loaded"
+        discussed_cos = ", ".join(session.discussed_companies) if session.discussed_companies else "None"
+        session_context = (
+            f"\n\nCURRENT SESSION STATE:\n"
+            f"- Candidate Resume: {resume_status}\n"
+            f"- Companies discussed in this session: {discussed_cos}\n"
+            f"- Jobs searched count: {session.jobs_searched}\n"
+        )
+
+    base_prompt = get_prompt("agent.v1").system_prompt_template.format(
         prefs_summary=prefs_summary,
         rejected_summary=rejected_summary,
     )
+    return base_prompt + session_context
 
 
 def get_approval_description(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -107,6 +122,7 @@ def run_agent_turn(
     user_message: str | None,
     conversation_history: list[dict[str, Any]],
     model: str | None = None,
+    session: AgentSession | None = None,
 ) -> dict[str, Any]:
     """Execute a single agent reasoning turn.
 
@@ -117,6 +133,10 @@ def run_agent_turn(
         raise RuntimeError(
             "OPENROUTER_API_KEY is not set. Please add it to your .env file."
         )
+
+    # Initialize default session if not provided
+    if session is None:
+        session = AgentSession()
 
     # 1. Append user's new message to history (if provided)
     if user_message:
@@ -138,7 +158,7 @@ def run_agent_turn(
     max_rounds = 5
     for round_idx in range(max_rounds):
         # Prepare body with system prompt prepended
-        messages_to_send = [{"role": "system", "content": build_agent_system_prompt()}] + conversation_history
+        messages_to_send = [{"role": "system", "content": build_agent_system_prompt(session)}] + conversation_history
         json_body = {
             "model": target_model,
             "messages": messages_to_send,
@@ -237,8 +257,12 @@ def run_agent_turn(
                     tool_result = {"error": f"Tool '{func_name}' is not registered."}
                 else:
                     try:
+                        session.record_tool_call(func_name, args)
                         tool_impl = TOOL_REGISTRY[func_name]
                         tool_result = tool_impl.fn(**args)
+                        
+                        from app.agent.cards import print_tool_result_card
+                        print_tool_result_card(func_name, tool_result)
                     except Exception as exc:  # noqa: BLE001
                         tool_result = {"error": f"Tool execution failed: {exc}"}
 

@@ -80,12 +80,23 @@ class ExportConfig(BaseModel):
     default_format: str = "csv"
 
 
+class AgentConfig(BaseModel):
+    """Configuration for agent experience and terminal UX."""
+    show_progress: bool = True
+    show_debug_logs: bool = False
+    stream_output: bool = True
+    animations: bool = True
+    theme: str = "default"
+    verbosity: str = "normal"
+
+
 class YamlConfig(BaseModel):
     """User preferences loaded from a non-secret config.yaml file."""
     default_profile: str = "frontend"
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
 
 
 def load_yaml_config(path: Path = Path("config.yaml")) -> YamlConfig:

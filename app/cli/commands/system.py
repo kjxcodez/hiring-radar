@@ -109,6 +109,78 @@ def mcp_serve(
 # 25. agent
 # ---------------------------------------------------------------------------
 
+def show_repl_help() -> None:
+    """Print clean categorized examples and help details for the Agent REPL."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.cli.common import console
+
+    table = Table(title="Hiring Radar AI Agent Help Commands", show_header=True, header_style="bold magenta")
+    table.add_column("Category", style="cyan", no_wrap=True)
+    table.add_column("Example Prompt / Description", style="white")
+
+    table.add_row("Job Search", '"recommend jobs matching my profile"\n"search Lever for software engineers"')
+    table.add_row("Company Research", '"research Wealthfront"\n"show company Vercel info"')
+    table.add_row("Resume Profile", '"score compatibility with Vercel"\n"suggest resume tailoring for Wealthfront"')
+    table.add_row("Applications CRM", '"list my applications"\n"prepare outreach drafts for Vercel"')
+    table.add_row("Monitoring Alerts", '"run change detection check"\n"show daily digest events"')
+    table.add_row("Session Memory", '"what was my last question?"\n"recommend more jobs like the ones discussed"')
+    table.add_row("General", '"help" (shows this table)\n"exit" / "quit" (terminates session)')
+
+    console.print(Panel(table, border_style="cyan"))
+
+
+def show_agent_dashboard(session: Any) -> None:
+    """Renders a beautiful startup dashboard summarizing Hiring Radar status metrics."""
+    from rich.panel import Panel
+    from rich.text import Text
+    from app.cli.common import console, get_container
+    from app.config import settings
+
+    container = get_container()
+    
+    # 1. Resume status
+    resume_status = "[bold green]✓ Loaded[/bold green]" if settings.resume_path and settings.resume_path.exists() else "[bold yellow]Not Loaded[/bold yellow]"
+    if settings.resume_path and settings.resume_path.exists():
+        session.loaded_resume = settings.resume_path
+
+    # 2. Database statistics
+    try:
+        companies_count = len(container.company_repo.load_all())
+        jobs_count = sum(len(c.jobs) for c in container.company_repo.load_all())
+    except Exception:
+        companies_count = 0
+        jobs_count = 0
+
+    try:
+        apps_count = len(container.application_repo.load_all())
+    except Exception:
+        apps_count = 0
+
+    try:
+        alerts_count = len(container.monitoring_repo.load_alerts())
+    except Exception:
+        alerts_count = 0
+    
+    # 3. Memory status
+    memory_path = settings.output_dir / "agent_memory.json"
+    memory_status = "[bold green]Enabled[/bold green]" if memory_path.exists() else "[bold yellow]Inactive[/bold yellow]"
+
+    dashboard_text = (
+        f"[bold purple]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold purple]\n\n"
+        f"                   [bold white]🤖 Hiring Radar AI Agent[/bold white]\n\n"
+        f"  [bold cyan]Resume:[/bold cyan]       {resume_status}\n"
+        f"  [bold cyan]Companies:[/bold cyan]    {companies_count}\n"
+        f"  [bold cyan]Jobs:[/bold cyan]         {jobs_count}\n"
+        f"  [bold cyan]Applications:[/bold cyan] {apps_count}\n"
+        f"  [bold cyan]Alerts:[/bold cyan]       {alerts_count}\n"
+        f"  [bold cyan]Memory:[/bold cyan]       {memory_status}\n\n"
+        f"  Type [bold yellow]help[/bold yellow] for examples. Type [bold red]exit[/bold red] to quit.\n\n"
+        f"[bold purple]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold purple]"
+    )
+    console.print(dashboard_text)
+
+
 def agent(
     model: Annotated[
         Optional[str],
@@ -121,14 +193,29 @@ def agent(
     """Start an interactive terminal reasoning agent loop (REPL)."""
     # Lazy loaded to avoid importing heavy LLM / OpenRouter files during quick commands
     from app.agent.planner import run_agent_turn
+    from app.agent.session import AgentSession
+    from app.agent.progress import AgentProgressRenderer
+    from app.agent.logging import setup_agent_logging
+    from app.agent.cards import print_tool_result_card
+    from app.config import yaml_config
 
-    console.print(
-        "\n[bold purple]🤖 Hiring Radar Autonomous AI Agent REPL[/bold purple]\n"
-        "Type your requests to discover, score, research, or recommend jobs.\n"
-        "Type [bold red]exit[/bold red] or [bold red]quit[/bold red] to end the session.\n"
-    )
+    # 1. Setup logging isolation
+    setup_agent_logging(show_debug_logs=yaml_config.agent.show_debug_logs)
 
+    # 2. Initialize Session
+    session = AgentSession()
     conversation_history: list[dict] = []
+
+    # 3. Render Dashboard
+    show_agent_dashboard(session)
+
+    # 4. Instantiate Progress Renderer
+    renderer = AgentProgressRenderer(
+        show_progress=yaml_config.agent.show_progress,
+        animations=yaml_config.agent.animations
+    )
+    container = get_container()
+    container.workflow_engine.register_event_listener(renderer.handle_event)
 
     while True:
         try:
@@ -137,22 +224,49 @@ def agent(
             console.print("\n[yellow]Session ended.[/yellow]")
             break
 
-        if user_msg.strip().lower() in ("exit", "quit"):
+        cleaned_msg = user_msg.strip()
+        if not cleaned_msg:
+            continue
+
+        if cleaned_msg.lower() in ("exit", "quit"):
             console.print("[yellow]Goodbye![/yellow]")
             break
 
-        if not user_msg.strip():
+        if cleaned_msg.lower() == "help":
+            show_repl_help()
             continue
 
-        user_input_to_send = user_msg
+        if cleaned_msg.lower() in ("cancel", "stop"):
+            console.print("[yellow]Prompt reset. Conversation memory cleared.[/yellow]")
+            conversation_history.clear()
+            session.clear()
+            continue
+
+        # Record last question in session memory
+        session.last_question = cleaned_msg
+
+        user_input_to_send = cleaned_msg
         while True:
-            with console.status("[bold yellow]Thinking...[/bold yellow]"):
-                try:
-                    res = run_agent_turn(user_input_to_send, conversation_history, model=model)
-                    conversation_history = res["updated_history"]
-                except Exception as exc:  # noqa: BLE001
-                    console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
-                    break
+            try:
+                # Run the reasoning loop with live progress rendering
+                with renderer:
+                    res = run_agent_turn(
+                        user_input_to_send,
+                        conversation_history,
+                        model=model,
+                        session=session
+                    )
+                conversation_history = res["updated_history"]
+            except KeyboardInterrupt:
+                # Cancel active workflows if any
+                active_ids = list(container.workflow_engine.active_contexts.keys())
+                for context_id in active_ids:
+                    container.workflow_engine.cancel(context_id)
+                console.print("\n[yellow]Operation cancelled by user.[/yellow]")
+                break
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
+                break
 
             if "pending_approval" in res:
                 pending = res["pending_approval"]
@@ -161,26 +275,39 @@ def agent(
                 tc_id = pending["tool_call_id"]
                 desc = pending["description"]
 
-                if res.get("tool_calls_made"):
-                    tools_str = ", ".join(res["tool_calls_made"])
-                    console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
-
                 console.print(f"\n[bold yellow]⚠️ Pending Approval:[/bold yellow] Agent wants to {desc}")
                 approved = typer.confirm("Approve this action?")
 
                 from app.agent.tools import execute_approved_tool
-                container = get_container()
                 mem = container.memory_repo.load()
 
                 if approved:
+                    mem.setdefault("past_decisions", [])
                     mem["past_decisions"].append({
                         "date": date.today().isoformat(),
                         "action": f"Approved and executed tool '{tool_name}' with arguments {args}",
                     })
                     container.memory_repo.save(mem)
-                    with console.status(f"[bold yellow]Executing {tool_name}...[/bold yellow]"):
-                        tool_result = execute_approved_tool(tool_name, args)
+                    
+                    # Track tool call in session
+                    session.record_tool_call(tool_name, args)
+
+                    try:
+                        with renderer:
+                            tool_result = execute_approved_tool(tool_name, args)
+                        
+                        # Print Rich Card representation if enabled
+                        print_tool_result_card(tool_name, tool_result)
+                    except KeyboardInterrupt:
+                        active_ids = list(container.workflow_engine.active_contexts.keys())
+                        for context_id in active_ids:
+                            container.workflow_engine.cancel(context_id)
+                        console.print("\n[yellow]Operation cancelled by user.[/yellow]")
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        tool_result = {"error": f"Tool execution failed: {exc}"}
                 else:
+                    mem.setdefault("past_decisions", [])
                     mem["past_decisions"].append({
                         "date": date.today().isoformat(),
                         "action": f"Declined execution of tool '{tool_name}' with arguments {args}",
@@ -200,9 +327,7 @@ def agent(
                 user_input_to_send = ""
                 continue
             else:
-                if res.get("tool_calls_made"):
-                    tools_str = ", ".join(res["tool_calls_made"])
-                    console.print(f"[dim]🔧 Tools invoked: {tools_str}[/dim]")
-
+                # Final response generated
+                console.print()
                 console.print(Markdown(res["reply"]))
                 break
