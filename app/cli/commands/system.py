@@ -362,6 +362,7 @@ def agent_doctor() -> None:
     from rich.table import Table
     from app.llm.registry import PROVIDER_REGISTRY, get_provider
     from app.config import yaml_config
+    from app.memory.store import global_memory_store
     
     table = Table(title="🤖 Agent Reasoning Doctor & Health Report", show_header=True)
     table.add_column("Subsystem / Metric", style="cyan")
@@ -383,8 +384,109 @@ def agent_doctor() -> None:
     
     # Fallback configuration
     table.add_row("Fallback Chain validity", ", ".join(yaml_config.llm.fallback_chain))
+
+    # Memory health check
+    try:
+        recs = global_memory_store.load_records("episodic")
+        profile = global_memory_store.load_profile()
+        table.add_row("Memory Store & Index Sanity", f"PASS ({len(recs)} episodic records, profile loaded)")
+    except Exception as e:
+        table.add_row("Memory Store & Index Sanity", f"FAIL ({e})")
     
     console.print(Panel(table, border_style="green"))
+
+
+@agent_app.command(name="memories")
+def agent_memories(
+    query: Annotated[Optional[str], typer.Argument(help="Optional query to filter memory records.")] = None
+) -> None:
+    """View and search episodic long-term memory logs."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.memory.store import global_memory_store
+    from app.memory.ranker import calculate_jaccard_similarity
+
+    records = global_memory_store.load_records("episodic")
+    if not records:
+        console.print("[yellow]No memory records stored yet.[/yellow]")
+        return
+
+    table = Table(title="🧠 Long-Term Episodic Memory Logs", show_header=True)
+    table.add_column("Memory ID", style="cyan")
+    table.add_column("Summary / Fact", style="white")
+    table.add_column("Importance", style="yellow")
+    table.add_column("Relevance Score", style="green")
+
+    for rec in records:
+        score = calculate_jaccard_similarity(query, rec.summary) if query else 1.0
+        if query and score == 0.0:
+            continue
+        table.add_row(rec.memory_id[:8], rec.summary, str(rec.importance), f"{score:.2f}")
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="profile")
+def agent_profile() -> None:
+    """Display the evolving learned user preferences profile."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.memory.store import global_memory_store
+
+    profile = global_memory_store.load_profile()
+    
+    table = Table(title="👤 Learned Evolving User Profile", show_header=False)
+    table.add_column("Preference", style="cyan")
+    table.add_column("Learned Value", style="white")
+
+    table.add_row("Preferred Roles", ", ".join(profile.preferred_roles) or "None")
+    table.add_row("Preferred Salary expectations", profile.preferred_salary or "None")
+    table.add_row("Locations preferred", ", ".join(profile.preferred_locations) or "None")
+    table.add_row("Remote Preference", "Remote Only" if profile.remote_preference is True else ("Hybrid/Onsite" if profile.remote_preference is False else "None"))
+    table.add_row("Tech stack", ", ".join(profile.tech_stack) or "None")
+    table.add_row("Target companies", ", ".join(profile.preferred_companies) or "None")
+    table.add_row("Seniority", profile.seniority or "None")
+    table.add_row("Target Industries", ", ".join(profile.preferred_industries) or "None")
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="preferences")
+def agent_preferences() -> None:
+    """Display free-form user preferences."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.memory.store import global_memory_store
+
+    prefs = global_memory_store.load_preferences()
+    if not prefs.preferences:
+        console.print("[yellow]No free-form preferences stored.[/yellow]")
+        return
+
+    table = Table(title="⚙️ Learned Free-Form Preferences", show_header=True)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+
+    for k, v in prefs.preferences.items():
+        table.add_row(k, v)
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="summarize")
+def agent_summarize() -> None:
+    """Trigger manual conversation summarization."""
+    from app.memory.store import global_memory_store
+    from app.memory.summarizer import summarize_conversation_history
+
+    records = global_memory_store.load_records("working")
+    if not records:
+        console.print("[yellow]No active session working memory to summarize.[/yellow]")
+        return
+        
+    messages = [{"role": r.source, "content": r.summary} for r in records]
+    summary = summarize_conversation_history(messages)
+    console.print(f"[green]Summarization completed successfully! Context saved:[/green]\n{summary}")
 
 
 @agent_app.callback(invoke_without_command=True)
@@ -512,7 +614,7 @@ def agent(
             if cleaned_msg.startswith("/"):
                 cmd_parts = cleaned_msg.split()
                 cmd = cmd_parts[0].lower()
-                arg = cmd_parts[1] if len(cmd_parts) > 1 else ""
+                arg = " ".join(cmd_parts[1:]) if len(cmd_parts) > 1 else ""
 
                 if cmd == "/exit":
                     console.print("[yellow]Goodbye![/yellow]")
@@ -571,6 +673,89 @@ def agent(
                         console.print(f"[green]Transcript exported successfully to {out_file}![/green]")
                     else:
                         console.print("[red]Invalid export format. Choose from: markdown, json, html.[/red]")
+                    continue
+                elif cmd == "/memory":
+                    agent_memories(arg if arg else None)
+                    continue
+                elif cmd == "/profile":
+                    agent_profile()
+                    continue
+                elif cmd == "/preferences":
+                    agent_preferences()
+                    continue
+                elif cmd == "/remember":
+                    if not arg:
+                        console.print("[red]Usage: /remember <fact>[/red]")
+                        continue
+                    from app.memory.models import MemoryRecord
+                    import uuid
+                    import time
+                    rec = MemoryRecord(
+                        memory_id=str(uuid.uuid4()),
+                        summary=arg,
+                        timestamp=time.time(),
+                        importance=3,
+                        tags=["manual"]
+                    )
+                    from app.memory.store import global_memory_store
+                    recs = global_memory_store.load_records("episodic")
+                    recs.append(rec)
+                    global_memory_store.save_records("episodic", recs)
+                    console.print(f"[green]Fact remembered successfully![/green]")
+                    continue
+                elif cmd == "/forget":
+                    if not arg:
+                        console.print("[red]Usage: /forget <keyword>[/red]")
+                        continue
+                    from app.memory.store import global_memory_store
+                    recs = global_memory_store.load_records("episodic")
+                    filtered = [r for r in recs if arg.lower() not in r.summary.lower()]
+                    global_memory_store.save_records("episodic", filtered)
+                    console.print(f"[green]Forgets completed successfully for keyword '{arg}'![/green]")
+                    continue
+                elif cmd == "/export-memory":
+                    from app.memory.store import global_memory_store
+                    import json
+                    export_data = {
+                        "episodic": [r.model_dump() for r in global_memory_store.load_records("episodic")],
+                        "profile": global_memory_store.load_profile().model_dump(),
+                        "preferences": global_memory_store.load_preferences().model_dump()
+                    }
+                    export_file = Path("memory_export.json")
+                    export_file.write_text(json.dumps(export_data, indent=2), encoding="utf-8")
+                    console.print(f"[green]Memory exported successfully to {export_file}![/green]")
+                    continue
+                elif cmd == "/import-memory":
+                    import json
+                    from app.memory.models import MemoryRecord, UserProfile, Preferences
+                    from app.memory.store import global_memory_store
+                    
+                    import_file = Path(arg if arg else "memory_export.json")
+                    if not import_file.exists():
+                        console.print(f"[red]Import file {import_file} not found.[/red]")
+                        continue
+                    try:
+                        import_data = json.loads(import_file.read_text(encoding="utf-8"))
+                        recs = [MemoryRecord(**r) for r in import_data.get("episodic", [])]
+                        global_memory_store.save_records("episodic", recs)
+                        global_memory_store.save_profile(UserProfile(**import_data.get("profile", {})))
+                        global_memory_store.save_preferences(Preferences(**import_data.get("preferences", {})))
+                        console.print(f"[green]Memory imported successfully from {import_file}![/green]")
+                    except Exception as e:
+                        console.print(f"[red]Memory import failed: {e}[/red]")
+                    continue
+                elif cmd == "/reset-memory":
+                    from app.memory.store import global_memory_store
+                    global_memory_store.clear()
+                    console.print("[green]Memory reset completed. All episodic and semantic records purged.[/green]")
+                    continue
+                elif cmd == "/enable-memory":
+                    yaml_config.memory.enabled = True
+                    console.print("[green]Memory module enabled.[/green]")
+                    continue
+                elif cmd == "/disable-memory":
+                    yaml_config.memory.enabled = False
+                    console.print("[green]Memory module disabled.[/green]")
                     continue
                 else:
                     console.print(f"[red]Unknown slash command: {cmd}. Type /help for list.[/red]")

@@ -122,6 +122,25 @@ class LLMConfig(BaseModel):
     fallback_chain: list[str] = ["google", "openrouter", "openai", "anthropic", "groq", "ollama"]
 
 
+class MemoryConfig(BaseModel):
+    """Configuration for AI Agent memory engine."""
+    enabled: bool = True
+    auto_learn: bool = True
+    auto_summarize: bool = True
+    max_working_messages: int = 30
+    episodic_limit: int = 10000
+    semantic_limit: int = 5000
+    retrieval_top_k: int = 8
+    summarization_threshold: int = 40
+    compression: bool = True
+    ranking: str = "hybrid"
+    embedding_backend: str = "local"
+    privacy_mode: str = "strict"
+    allow_preference_learning: bool = True
+    allow_conversation_learning: bool = True
+    auto_archive: bool = True
+
+
 class YamlConfig(BaseModel):
     """User preferences loaded from a non-secret config.yaml file."""
     default_profile: str = "frontend"
@@ -131,6 +150,7 @@ class YamlConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 def load_yaml_config(path: Path = Path("config.yaml")) -> YamlConfig:

@@ -63,6 +63,17 @@ def build_agent_system_prompt(session: AgentSession | None = None) -> str:
     prefs = mem.get("preferences", {})
     rejected = mem.get("rejected_companies", [])
 
+    # Retrieve relevant long-term memories
+    long_term_memories = ""
+    from app.config import yaml_config
+    if yaml_config.memory.enabled and session and getattr(session, "last_question", None):
+        from app.memory.retriever import retrieve_relevant_memories
+        retrieved = retrieve_relevant_memories(session.last_question, top_k=yaml_config.memory.retrieval_top_k)
+        if retrieved:
+            long_term_memories = "\n\nRELEVANT LONG-TERM CONTEXT MEMORIES:\n"
+            for r in retrieved:
+                long_term_memories += f"- {r.summary} (confidence: {r.confidence:.1f})\n"
+
     prefs_summary = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) if prefs else "None"
     rejected_summary = ", ".join(rejected) if rejected else "None"
 
@@ -151,7 +162,7 @@ def build_agent_system_prompt(session: AgentSession | None = None) -> str:
         prefs_summary=prefs_summary,
         rejected_summary=rejected_summary,
     )
-    return base_prompt + session_context
+    return base_prompt + session_context + long_term_memories
 
 
 def get_approval_description(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -176,6 +187,9 @@ def run_agent_turn(
     Submits the new message and conversation history to OpenRouter, executes tool calls,
     and loops back until a final text reply is generated (capped at 5 rounds).
     """
+    if user_message:
+        from app.memory.profile import learn_from_user_query
+        learn_from_user_query(user_message)
     if not settings.openrouter_api_key:
         raise RuntimeError(
             "OPENROUTER_API_KEY is not set. Please add it to your .env file."
