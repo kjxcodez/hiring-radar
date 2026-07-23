@@ -22,3 +22,4 @@ class Execution(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     result: Optional[Any] = None
     error: Optional[str] = None
+    task_graph: Optional[Any] = None

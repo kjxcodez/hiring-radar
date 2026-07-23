@@ -10,3 +10,5 @@ class ExecutionStatus(str, Enum):
     CANCELLED = "cancelled"
     RETRYING = "retrying"
     FAILED = "failed"
+    PAUSED = "paused"
+    SUCCEEDED = "succeeded"

@@ -38,16 +38,24 @@ class Scheduler:
     def calculate_next_run(self, job: ScheduledJob) -> None:
         """Compute the next UTC execution time for a scheduled job."""
         now = datetime.utcnow()
-        if job.cron_or_interval.startswith("interval:"):
+        val = job.cron_or_interval.lower()
+        if val == "every_hour":
+            job.next_run = now + timedelta(hours=1)
+        elif val == "daily":
+            job.next_run = now + timedelta(days=1)
+        elif val == "weekly":
+            job.next_run = now + timedelta(weeks=1)
+        elif val in ("one_shot", "manual"):
+            job.next_run = None
+        elif val.startswith("interval:"):
             try:
-                seconds = int(job.cron_or_interval.split(":")[1])
+                seconds = int(val.split(":")[1])
                 base = job.last_run or now
                 job.next_run = base + timedelta(seconds=seconds)
             except Exception:
                 job.next_run = now + timedelta(hours=1)
-        elif job.cron_or_interval.startswith("cron:"):
-            # Simplified cron parser supporting: minutes hours * * *
-            parts = job.cron_or_interval.split(":")[1].split()
+        elif val.startswith("cron:"):
+            parts = val.split(":")[1].split()
             if len(parts) == 5:
                 try:
                     minute = int(parts[0]) if parts[0].isdigit() else 0

@@ -74,6 +74,13 @@ class JobQueue:
         """Return a copy list of all queued jobs."""
         return [Execution(**item) for item in self._load()]
 
+    def get_execution(self, execution_id: str) -> Optional[Execution]:
+        """Retrieve a specific execution from queue by ID."""
+        for item in self._load():
+            if item.get("id") == execution_id:
+                return Execution(**item)
+        return None
+
     def _load(self) -> list:
         data = self.storage.read(self.filepath)
         return data if isinstance(data, list) else []
