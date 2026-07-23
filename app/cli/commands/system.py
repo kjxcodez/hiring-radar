@@ -259,145 +259,148 @@ def agent(
     from app.agent.planner import run_agent_turn
     from app.agent.session import AgentSession
     from app.agent.progress import AgentProgressRenderer
-    from app.agent.logging import setup_agent_logging
+    from app.agent.logging import AgentLoggingContext
     from app.agent.cards import print_tool_result_card
     from app.config import yaml_config
 
-    # 1. Setup logging isolation
-    setup_agent_logging(show_debug_logs=yaml_config.agent.show_debug_logs)
+    with AgentLoggingContext(show_debug_logs=yaml_config.agent.show_debug_logs):
+        # 2. Initialize Session
+        session = AgentSession()
+        conversation_history: list[dict] = []
 
-    # 2. Initialize Session
-    session = AgentSession()
-    conversation_history: list[dict] = []
+        # 3. Render Dashboard
+        show_agent_dashboard(session)
 
-    # 3. Render Dashboard
-    show_agent_dashboard(session)
+        # 4. Instantiate Progress Renderer
+        renderer = AgentProgressRenderer(
+            show_progress=yaml_config.agent.show_progress,
+            animations=yaml_config.agent.animations
+        )
+        container = get_container()
+        container.workflow_engine.register_event_listener(renderer.handle_event)
 
-    # 4. Instantiate Progress Renderer
-    renderer = AgentProgressRenderer(
-        show_progress=yaml_config.agent.show_progress,
-        animations=yaml_config.agent.animations
-    )
-    container = get_container()
-    container.workflow_engine.register_event_listener(renderer.handle_event)
-
-    while True:
-        # Run state validation and raise warnings if inconsistencies exist
-        from app.agent.state_validator import validate_system_state
-        warnings = validate_system_state()
-        for w in warnings:
-            console.print(f"[bold yellow]⚠️ System State Warning:[/bold yellow] {w}")
-
-        try:
-            user_msg = Prompt.ask("\n[bold cyan]Agent[/bold cyan]")
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Session ended.[/yellow]")
-            break
-
-        cleaned_msg = user_msg.strip()
-        if not cleaned_msg:
-            continue
-
-        if cleaned_msg.lower() in ("exit", "quit"):
-            console.print("[yellow]Goodbye![/yellow]")
-            break
-
-        if cleaned_msg.lower() == "help":
-            show_repl_help()
-            continue
-
-        if cleaned_msg.lower() in ("cancel", "stop"):
-            console.print("[yellow]Prompt reset. Conversation memory cleared.[/yellow]")
-            conversation_history.clear()
-            session.clear()
-            continue
-
-        # Record last question in session memory
-        session.last_question = cleaned_msg
-
-        user_input_to_send = cleaned_msg
         while True:
+            # Run state validation and raise warnings if inconsistencies exist
+            from app.agent.state_validator import validate_system_state
+            warnings = validate_system_state()
+            for w in warnings:
+                console.print(f"[bold yellow]⚠️ System State Warning:[/bold yellow] {w}")
+
             try:
-                # Run the reasoning loop with live progress rendering
-                with renderer:
-                    res = run_agent_turn(
-                        user_input_to_send,
-                        conversation_history,
-                        model=model,
-                        session=session
-                    )
-                conversation_history = res["updated_history"]
-            except KeyboardInterrupt:
-                # Cancel active workflows if any
-                active_ids = list(container.workflow_engine.active_contexts.keys())
-                for context_id in active_ids:
-                    container.workflow_engine.cancel(context_id)
-                console.print("\n[yellow]Operation cancelled by user.[/yellow]")
-                break
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[bold red]Error in agent loop:[/bold red] {exc}")
+                user_msg = Prompt.ask("\n[bold cyan]Agent[/bold cyan]")
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Session ended.[/yellow]")
                 break
 
-            if "pending_approval" in res:
-                pending = res["pending_approval"]
-                tool_name = pending["tool"]
-                args = pending["arguments"]
-                tc_id = pending["tool_call_id"]
-                desc = pending["description"]
-
-                console.print(f"\n[bold yellow]⚠️ Pending Approval:[/bold yellow] Agent wants to {desc}")
-                approved = typer.confirm("Approve this action?")
-
-                from app.agent.tools import execute_approved_tool
-                mem = container.memory_repo.load()
-
-                if approved:
-                    mem.setdefault("past_decisions", [])
-                    mem["past_decisions"].append({
-                        "date": date.today().isoformat(),
-                        "action": f"Approved and executed tool '{tool_name}' with arguments {args}",
-                    })
-                    container.memory_repo.save(mem)
-                    
-                    # Track tool call in session
-                    session.record_tool_call(tool_name, args)
-
-                    try:
-                        with renderer:
-                            tool_result = execute_approved_tool(tool_name, args)
-                        
-                        # Print Rich Card representation if enabled
-                        print_tool_result_card(tool_name, tool_result)
-                    except KeyboardInterrupt:
-                        active_ids = list(container.workflow_engine.active_contexts.keys())
-                        for context_id in active_ids:
-                            container.workflow_engine.cancel(context_id)
-                        console.print("\n[yellow]Operation cancelled by user.[/yellow]")
-                        break
-                    except Exception as exc:  # noqa: BLE001
-                        tool_result = {"error": f"Tool execution failed: {exc}"}
-                else:
-                    mem.setdefault("past_decisions", [])
-                    mem["past_decisions"].append({
-                        "date": date.today().isoformat(),
-                        "action": f"Declined execution of tool '{tool_name}' with arguments {args}",
-                    })
-                    container.memory_repo.save(mem)
-                    tool_result = {"error": "User declined to approve this action."}
-
-                # Append tool result message
-                tool_msg = {
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "name": tool_name,
-                    "content": json.dumps(tool_result),
-                }
-                conversation_history.append(tool_msg)
-
-                user_input_to_send = ""
+            cleaned_msg = user_msg.strip()
+            if not cleaned_msg:
                 continue
-            else:
-                # Final response generated
-                console.print()
-                console.print(Markdown(res["reply"]))
+
+            if cleaned_msg.lower() in ("exit", "quit"):
+                console.print("[yellow]Goodbye![/yellow]")
                 break
+
+            if cleaned_msg.lower() == "help":
+                show_repl_help()
+                continue
+
+            if cleaned_msg.lower() in ("cancel", "stop"):
+                console.print("[yellow]Prompt reset. Conversation memory cleared.[/yellow]")
+                conversation_history.clear()
+                session.clear()
+                continue
+
+            # Record last question in session memory
+            session.last_question = cleaned_msg
+
+            user_input_to_send = cleaned_msg
+            while True:
+                try:
+                    # Run the reasoning loop with live progress rendering
+                    with renderer:
+                        res = run_agent_turn(
+                            user_input_to_send,
+                            conversation_history,
+                            model=model,
+                            session=session
+                        )
+                    conversation_history = res["updated_history"]
+                except KeyboardInterrupt:
+                    # Cancel active workflows if any
+                    active_ids = list(container.workflow_engine.active_contexts.keys())
+                    for context_id in active_ids:
+                        container.workflow_engine.cancel(context_id)
+                    console.print("\n[yellow]Operation cancelled by user.[/yellow]")
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    import loguru
+                    loguru.logger.exception("Agent loop unhandled exception")
+                    console.print("\n[bold red]Something went wrong.[/bold red]")
+                    console.print("Details have been written to [cyan]logs/hiring-radar.log[/cyan]\n")
+                    break
+
+                if "pending_approval" in res:
+                    pending = res["pending_approval"]
+                    tool_name = pending["tool"]
+                    args = pending["arguments"]
+                    tc_id = pending["tool_call_id"]
+                    desc = pending["description"]
+
+                    console.print(f"\n[bold yellow]⚠️ Pending Approval:[/bold yellow] Agent wants to {desc}")
+                    approved = typer.confirm("Approve this action?")
+
+                    from app.agent.tools import execute_approved_tool
+                    mem = container.memory_repo.load()
+
+                    if approved:
+                        mem.setdefault("past_decisions", [])
+                        mem["past_decisions"].append({
+                            "date": date.today().isoformat(),
+                            "action": f"Approved and executed tool '{tool_name}' with arguments {args}",
+                        })
+                        container.memory_repo.save(mem)
+                        
+                        # Track tool call in session
+                        session.record_tool_call(tool_name, args)
+
+                        try:
+                            with renderer:
+                                tool_result = execute_approved_tool(tool_name, args)
+                            
+                            # Print Rich Card representation if enabled
+                            print_tool_result_card(tool_name, tool_result)
+                        except KeyboardInterrupt:
+                            active_ids = list(container.workflow_engine.active_contexts.keys())
+                            for context_id in active_ids:
+                                container.workflow_engine.cancel(context_id)
+                            console.print("\n[yellow]Operation cancelled by user.[/yellow]")
+                            break
+                        except Exception as exc:  # noqa: BLE001
+                            import loguru
+                            loguru.logger.exception("Tool execution failed")
+                            tool_result = {"error": f"Tool execution failed: {exc}"}
+                    else:
+                        mem.setdefault("past_decisions", [])
+                        mem["past_decisions"].append({
+                            "date": date.today().isoformat(),
+                            "action": f"Declined execution of tool '{tool_name}' with arguments {args}",
+                        })
+                        container.memory_repo.save(mem)
+                        tool_result = {"error": "User declined to approve this action."}
+
+                    # Append tool result message
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": tool_name,
+                        "content": json.dumps(tool_result),
+                    }
+                    conversation_history.append(tool_msg)
+
+                    user_input_to_send = ""
+                    continue
+                else:
+                    # Final response generated
+                    console.print()
+                    console.print(Markdown(res["reply"]))
+                    break

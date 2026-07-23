@@ -83,6 +83,52 @@ def inspect_logging_infrastructure() -> str:
     except Exception as exc:
         report.append(f"  Error loading loguru sinks: {exc}")
 
+    # 4. Verify Logging Isolation Status
+    import sys
+    from app.config import yaml_config
+    show_debug = yaml_config.agent.show_debug_logs
+    
+    has_console_root = False
+    for h in root.handlers:
+        if h.__class__.__name__ == "RichHandler":
+            has_console_root = True
+        elif isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            stream = getattr(h, "stream", None)
+            if stream in (sys.stdout, sys.stderr):
+                has_console_root = True
+
+    has_console_loguru = False
+    try:
+        from loguru import logger as loguru_logger
+        core = getattr(loguru_logger, "_core", None)
+        if core:
+            handlers = getattr(core, "handlers", {})
+            for h_entry in handlers.values():
+                sink = getattr(h_entry, "_sink", None)
+                sink_class = sink.__class__.__name__
+                if sink_class == "StreamSink":
+                    stream = getattr(sink, "_stream", None)
+                    if stream in (sys.stdout, sys.stderr):
+                        has_console_loguru = True
+    except Exception:
+        pass
+
+    isolation_passed = True
+    reasons = []
+    if not show_debug:
+        if has_console_root:
+            isolation_passed = False
+            reasons.append("Root logger has an active console handler (RichHandler or StreamHandler).")
+        if has_console_loguru:
+            isolation_passed = False
+            reasons.append("Loguru has an active console Sink (StreamSink).")
+            
+    status_str = "PASS" if isolation_passed else "FAILED"
+    report.append(f"\nLogging isolation: {status_str}")
+    if reasons:
+        for r in reasons:
+            report.append(f"  - Warning: {r}")
+
     report.append("\n======================================================================")
     return "\n".join(report)
 
