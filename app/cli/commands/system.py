@@ -392,6 +392,16 @@ def agent_doctor() -> None:
         table.add_row("Memory Store & Index Sanity", f"PASS ({len(recs)} episodic records, profile loaded)")
     except Exception as e:
         table.add_row("Memory Store & Index Sanity", f"FAIL ({e})")
+
+    # Runtime health check
+    try:
+        if container and hasattr(container, "runtime") and container.runtime:
+            q_len = len(container.runtime.queue.list_queued())
+            table.add_row("Runtime Engine State", f"PASS ({q_len} queued execution tasks)")
+        else:
+            table.add_row("Runtime Engine State", "FAIL (Runtime not initialized)")
+    except Exception as e:
+        table.add_row("Runtime Engine State", f"FAIL ({e})")
     
     console.print(Panel(table, border_style="green"))
 
@@ -487,6 +497,149 @@ def agent_summarize() -> None:
     messages = [{"role": r.source, "content": r.summary} for r in records]
     summary = summarize_conversation_history(messages)
     console.print(f"[green]Summarization completed successfully! Context saved:[/green]\n{summary}")
+@agent_app.command(name="runtime")
+def agent_runtime() -> None:
+    """Display runtime dashboard statistics."""
+    from app.ui.runtime import show_runtime_dashboard
+    show_runtime_dashboard()
+
+
+@agent_app.command(name="queue")
+def agent_queue() -> None:
+    """List all queued background workflow execution tasks."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.cli.common import get_container
+    
+    container = get_container()
+    if not container or not hasattr(container, "runtime") or not container.runtime:
+        console.print("[red]Autonomous Runtime Engine is not initialized.[/red]")
+        return
+        
+    queue_list = container.runtime.queue.list_queued()
+    if not queue_list:
+        console.print("[yellow]No tasks currently in execution queue.[/yellow]")
+        return
+        
+    table = Table(title="🤖 Persistent Task Execution Queue", show_header=True)
+    table.add_column("Execution ID", style="cyan")
+    table.add_column("Workflow / Graph Goal", style="white")
+    table.add_column("Status", style="yellow")
+    table.add_column("Priority", style="green")
+
+    for item in queue_list:
+        table.add_row(item.id[:8], item.workflow_name, item.status.value, str(item.metadata.get("priority", 0)))
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="scheduler")
+def agent_scheduler() -> None:
+    """List scheduled recurring alert/hiring watch triggers."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.cli.common import get_container
+    
+    container = get_container()
+    if not container or not hasattr(container, "runtime") or not container.runtime:
+        console.print("[red]Autonomous Runtime Engine is not initialized.[/red]")
+        return
+        
+    schedules = container.runtime.scheduler.load_schedules()
+    if not schedules:
+        console.print("[yellow]No periodic schedules set.[/yellow]")
+        return
+        
+    table = Table(title="⏰ Background Scheduler Recurring Jobs", show_header=True)
+    table.add_column("Job ID", style="cyan")
+    table.add_column("Target Workflow", style="white")
+    table.add_column("Cron / Interval", style="green")
+    table.add_column("Next Execution (UTC)", style="yellow")
+
+    for job in schedules.values():
+        next_run_str = job.next_run.strftime("%Y-%m-%d %H:%M:%S") if job.next_run else "Manual"
+        table.add_row(job.id, job.workflow_name, job.cron_or_interval, next_run_str)
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="tasks")
+def agent_tasks() -> None:
+    """List executing tasks in active task graphs."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from app.cli.common import get_container
+    
+    container = get_container()
+    if not container or not hasattr(container, "runtime") or not container.runtime:
+        console.print("[red]Autonomous Runtime Engine is not initialized.[/red]")
+        return
+        
+    active_graphs = container.runtime.active_graphs
+    if not active_graphs:
+        console.print("[yellow]No active task graphs executing in runtime.[/yellow]")
+        return
+        
+    table = Table(title="🤖 Active Executing Task Graphs & Nodes", show_header=True)
+    table.add_column("Task ID", style="cyan")
+    table.add_column("Task Name", style="white")
+    table.add_column("Dependencies", style="yellow")
+    table.add_column("Status", style="green")
+
+    for graph in active_graphs.values():
+        for t in graph.tasks.values():
+            deps = ", ".join(t.dependencies) if t.dependencies else "None"
+            table.add_row(t.id[:8], t.name, deps, t.status.value)
+
+    console.print(Panel(table, border_style="purple"))
+
+
+@agent_app.command(name="pause")
+def agent_pause(execution_id: str) -> None:
+    """Pause a running workflow graph execution."""
+    from app.cli.common import get_container
+    container = get_container()
+    if container and container.runtime and container.runtime.pause(execution_id):
+        console.print(f"[green]Successfully paused execution {execution_id}![/green]")
+    else:
+        console.print(f"[red]Failed to pause execution {execution_id}.[/red]")
+
+
+@agent_app.command(name="resume")
+def agent_resume(execution_id: str) -> None:
+    """Resume a paused workflow graph execution."""
+    from app.cli.common import get_container
+    container = get_container()
+    if container and container.runtime and container.runtime.resume(execution_id):
+        console.print(f"[green]Successfully resumed execution {execution_id}![/green]")
+    else:
+        console.print(f"[red]Failed to resume execution {execution_id}.[/red]")
+
+
+@agent_app.command(name="cancel")
+def agent_cancel(execution_id: str) -> None:
+    """Cancel a running workflow graph execution."""
+    from app.cli.common import get_container
+    container = get_container()
+    if container and container.runtime and container.runtime.cancel(execution_id):
+        console.print(f"[green]Successfully cancelled execution {execution_id}![/green]")
+    else:
+        console.print(f"[red]Failed to cancel execution {execution_id}.[/red]")
+
+
+@agent_app.command(name="watch")
+def agent_watch(company: str) -> None:
+    """Schedule continuous monitoring watch alerts for a company."""
+    from app.cli.common import get_container
+    container = get_container()
+    if container and container.runtime:
+        container.runtime.scheduler.add_schedule(
+            job_id=f"watch_{company.lower()}",
+            workflow_name="company_research",
+            cron_or_interval="interval:3600",
+            company_name=company
+        )
+        console.print(f"[green]Continuous watch scheduled for company '{company}' (every hour)![/green]")
 
 
 @agent_app.callback(invoke_without_command=True)
@@ -756,6 +909,39 @@ def agent(
                 elif cmd == "/disable-memory":
                     yaml_config.memory.enabled = False
                     console.print("[green]Memory module disabled.[/green]")
+                    continue
+                elif cmd == "/tasks":
+                    agent_tasks()
+                    continue
+                elif cmd == "/runtime":
+                    agent_runtime()
+                    continue
+                elif cmd == "/queue":
+                    agent_queue()
+                    continue
+                elif cmd == "/watch":
+                    if not arg:
+                        console.print("[red]Usage: /watch <company>[/red]")
+                        continue
+                    agent_watch(arg)
+                    continue
+                elif cmd == "/pause":
+                    if not arg:
+                        console.print("[red]Usage: /pause <execution_id>[/red]")
+                        continue
+                    agent_pause(arg)
+                    continue
+                elif cmd == "/resume":
+                    if not arg:
+                        console.print("[red]Usage: /resume <execution_id>[/red]")
+                        continue
+                    agent_resume(arg)
+                    continue
+                elif cmd == "/cancel":
+                    if not arg:
+                        console.print("[red]Usage: /cancel <execution_id>[/red]")
+                        continue
+                    agent_cancel(arg)
                     continue
                 else:
                     console.print(f"[red]Unknown slash command: {cmd}. Type /help for list.[/red]")

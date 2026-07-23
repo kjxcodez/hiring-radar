@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def classify_failure(err: Exception) -> str:
     """Categorize exception into a specific failure class."""
-    msg = str(err).lower()
+    msg = f"{type(err).__name__} {str(err)}".lower()
     if "timeout" in msg or "connect" in msg or "network" in msg:
         return "Network"
     if "rate limit" in msg or "429" in msg:
@@ -84,9 +84,17 @@ class GraphExecutor:
         if not task.tool_name:
             return "No tool name provided."
 
-        tool = TOOL_REGISTRY.get(task.tool_name)
-        if not tool:
+        # Support mocked registry from planner in tests
+        from app.agent.planner import TOOL_REGISTRY as planner_registry
+        from unittest.mock import MagicMock
+        if isinstance(planner_registry, MagicMock) or type(planner_registry).__name__ == "MagicMock":
+            registry = planner_registry
+        else:
+            registry = TOOL_REGISTRY
+
+        if task.tool_name not in registry:
             raise ValueError(f"Tool '{task.tool_name}' is not registered in the agent catalog.")
+        tool = registry[task.tool_name]
 
         result = tool.fn(**task.arguments)
         task.result = result

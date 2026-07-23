@@ -53,7 +53,10 @@ class Worker:
                 # 2. Dequeue next runnable job
                 execution = self.runtime.queue.dequeue()
                 if execution:
-                    self._execute_job(execution)
+                    if execution.task_graph:
+                        self._execute_graph(execution)
+                    else:
+                        self._execute_job(execution)
                 else:
                     time.sleep(1.0)
             except Exception as e:
@@ -127,3 +130,48 @@ class Worker:
 
         finally:
             self.runtime.locks.release(lock_name)
+
+    def _execute_graph(self, execution: Execution) -> None:
+        """Execute a structured TaskGraph using GraphExecutor."""
+        from app.runtime.executor import GraphExecutor
+        from app.runtime.state import ExecutionStatus
+        
+        logger.info("Worker executing task graph %s (%s)", execution.id, execution.workflow_name)
+        
+        try:
+            execution.status = ExecutionStatus.RUNNING
+            execution.started_at = datetime.datetime.utcnow()
+            self.runtime.history.record(execution)
+            
+            # Save state in active_graphs list
+            self.runtime.active_graphs[execution.task_graph.graph_id] = execution.task_graph
+            self.runtime.recovery.save_state(self.runtime.active_graphs)
+            
+            workers_cnt = getattr(self.runtime.settings, "background_workers", 2)
+            executor = GraphExecutor(max_workers=workers_cnt)
+            executor.execute_graph(execution.task_graph)
+            
+            if execution.task_graph.is_completed():
+                execution.status = ExecutionStatus.COMPLETED
+            else:
+                execution.status = ExecutionStatus.FAILED
+                
+            execution.completed_at = datetime.datetime.utcnow()
+            execution.duration = (execution.completed_at - execution.started_at).total_seconds()
+            self.runtime.history.record(execution)
+            
+            # Remove from active graphs recovery
+            self.runtime.active_graphs.pop(execution.task_graph.graph_id, None)
+            self.runtime.recovery.save_state(self.runtime.active_graphs)
+            
+            logger.info("Graph %s finished with status: %s", execution.id, execution.status)
+        except Exception as e:
+            execution.status = ExecutionStatus.FAILED
+            execution.completed_at = datetime.datetime.utcnow()
+            execution.error = str(e)
+            self.runtime.history.record(execution)
+            
+            self.runtime.active_graphs.pop(execution.task_graph.graph_id, None)
+            self.runtime.recovery.save_state(self.runtime.active_graphs)
+            
+            logger.error("Graph %s failed. Error: %s", execution.id, e)

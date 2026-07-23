@@ -361,138 +361,173 @@ def run_agent_turn(
             "tool_calls_made": tool_calls_made
         }
 
-    # 8. Standard reasoning pipeline (LLM structured loop)
+    # 8. Decoupled Tool Execution via Task Graph Submission
     target_model = model or settings.openrouter_model
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/kjxcodez/hiring-radar",
-        "X-Title": "hiring-radar-agent",
-    }
-
-    tool_specs = get_tool_specs()
+    strategy_prompt = get_response_strategy_prompt(plan.intent)
+    base_prompt = build_agent_system_prompt(session) + strategy_prompt
+    messages_to_send = [{"role": "system", "content": base_prompt}] + conversation_history
     
-    # Reasoning loop (capped at 5 rounds)
-    max_rounds = 5
-    for round_idx in range(max_rounds):
-        strategy_prompt = get_response_strategy_prompt(plan.intent)
-        base_prompt = build_agent_system_prompt(session) + strategy_prompt
-        
-        messages_to_send = [{"role": "system", "content": base_prompt}] + conversation_history
-        
-        from app.llm.models import LLMRequest
-        from app.llm.router import LLMRouter
-        
-        req = LLMRequest(
-            messages=messages_to_send,
-            model=target_model,
-            temperature=0.3,
-            tools=tool_specs,
-            task_type=plan.intent
-        )
-        
-        try:
-            res_obj = LLMRouter.complete(req)
-            content = res_obj.content
-            tool_calls = res_obj.tool_calls
-            
-            if content and content.startswith("Error:"):
-                session.planning_metrics["failed_plans"] += 1
-                return {
-                    "reply": content,
-                    "updated_history": conversation_history,
-                    "tool_calls_made": tool_calls_made,
-                }
-        except Exception as exc:
-            err_msg = f"LLM Routing failed: {exc}"
-            logger.error("Agent turn failed: %s", err_msg)
-            session.planning_metrics["failed_plans"] += 1
-            return {
-                "reply": f"Error: {err_msg}",
-                "updated_history": conversation_history,
-                "tool_calls_made": tool_calls_made,
-            }
+    from app.llm.models import LLMRequest
+    from app.llm.router import LLMRouter
+    from app.runtime.task import Task, TaskGraph
+    from app.runtime.state import ExecutionStatus
+    from app.cli.common import get_container
+    from app.config import yaml_config
+    
+    tool_specs = get_tool_specs()
+    req = LLMRequest(
+        messages=messages_to_send,
+        model=target_model,
+        temperature=0.3,
+        tools=tool_specs,
+        task_type=plan.intent
+    )
+    
+    try:
+        res_obj = LLMRouter.complete(req)
+        content = res_obj.content
+        tool_calls = res_obj.tool_calls
+    except Exception as exc:
+        err_msg = f"LLM Routing failed: {exc}"
+        logger.error("Agent turn failed: %s", err_msg)
+        session.planning_metrics["failed_plans"] += 1
+        return {
+            "reply": f"Error: {err_msg}",
+            "updated_history": conversation_history,
+            "tool_calls_made": tool_calls_made,
+        }
 
-        # If model requested tool calls, execute them
-        if tool_calls:
+    # If LLM did not request any tool calls, it's a direct reply
+    if not tool_calls:
+        final_reply = content or ""
+        conversation_history.append({"role": "assistant", "content": final_reply})
+        session.planning_metrics["successful_plans"] += 1
+        return {
+            "reply": final_reply,
+            "updated_history": conversation_history,
+            "tool_calls_made": tool_calls_made
+        }
+
+    # Verify side-effecting tools for Approval Gate first
+    for tc in tool_calls:
+        tc_id = tc.get("id") or "task_0"
+        func = tc.get("function", {})
+        func_name = func.get("name")
+        args_raw = func.get("arguments", "{}")
+        
+        if isinstance(args_raw, str):
+            try:
+                args = json.loads(args_raw)
+            except Exception:
+                args = {}
+        else:
+            args = args_raw
+            
+        if func_name in TOOL_REGISTRY and TOOL_REGISTRY[func_name].side_effecting:
             assistant_msg = {
                 "role": "assistant",
                 "content": content,
                 "tool_calls": tool_calls,
             }
             conversation_history.append(assistant_msg)
-
-            for tc in tool_calls:
-                tc_id = tc.get("id")
-                func = tc.get("function", {})
-                func_name = func.get("name")
-                args_raw = func.get("arguments", "{}")
-
-                tool_calls_made.append(func_name)
-
-                if isinstance(args_raw, str):
-                    try:
-                        args = json.loads(args_raw)
-                    except Exception as e:  # noqa: BLE001
-                        args = {}
-                else:
-                    args = args_raw
-
-                # Mechanical Approval Gate check
-                if func_name in TOOL_REGISTRY and TOOL_REGISTRY[func_name].side_effecting:
-                    return {
-                        "pending_approval": {
-                            "tool": func_name,
-                            "tool_call_id": tc_id,
-                            "arguments": args,
-                            "description": get_approval_description(func_name, args)
-                        },
-                        "updated_history": conversation_history,
-                        "tool_calls_made": tool_calls_made,
-                    }
-
-                # Execute tool
-                if func_name not in TOOL_REGISTRY:
-                    tool_result = {"error": f"Tool '{func_name}' is not registered."}
-                else:
-                    try:
-                        session.record_tool_call(func_name, args)
-                        tool_impl = TOOL_REGISTRY[func_name]
-                        tool_result = tool_impl.fn(**args)
-                        
-                        # Cache recommendations if returned
-                        if func_name == "recommend" and isinstance(tool_result, list):
-                            session.last_recommendations = tool_result
-                        
-                        from app.agent.cards import print_tool_result_card
-                        print_tool_result_card(func_name, tool_result)
-                    except Exception as exc:  # noqa: BLE001
-                        tool_result = {"error": f"Tool execution failed: {exc}"}
-
-                # Append tool result message
-                tool_msg = {
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "name": func_name,
-                    "content": json.dumps(tool_result),
-                }
-                conversation_history.append(tool_msg)
-
-            continue
-
-        else:
-            final_reply = content or ""
-            conversation_history.append({"role": "assistant", "content": final_reply})
-            session.planning_metrics["successful_plans"] += 1
             return {
-                "reply": final_reply,
+                "pending_approval": {
+                    "tool": func_name,
+                    "tool_call_id": tc_id,
+                    "arguments": args,
+                    "description": get_approval_description(func_name, args)
+                },
                 "updated_history": conversation_history,
                 "tool_calls_made": tool_calls_made,
             }
 
-    session.planning_metrics["failed_plans"] += 1
+    # Compile a TaskGraph representing the requested tool executions
+    graph = TaskGraph(goal=f"Execute tools requested by LLM for: {plan.goal}")
+    previous_task_id = None
+    
+    for idx, tc in enumerate(tool_calls):
+        tc_id = tc.get("id") or f"task_{idx}"
+        func = tc.get("function", {})
+        func_name = func.get("name")
+        args_raw = func.get("arguments", "{}")
+        
+        if isinstance(args_raw, str):
+            try:
+                args = json.loads(args_raw)
+            except Exception:
+                args = {}
+        else:
+            args = args_raw
+            
+        task = Task(
+            id=tc_id,
+            name=f"Tool Call: {func_name}",
+            tool_name=func_name,
+            arguments=args,
+            dependencies=[previous_task_id] if previous_task_id else []
+        )
+        graph.add_task(task)
+        previous_task_id = tc_id
+
+    # Submit graph to runtime or executor
+    container = get_container()
+    if container and hasattr(container, "runtime") and container.runtime:
+        execution = container.runtime.submit_graph(graph)
+        from app.runtime.executor import GraphExecutor
+        executor = GraphExecutor(max_workers=yaml_config.runtime.background_workers)
+        executor.execute_graph(graph)
+        execution.status = ExecutionStatus.COMPLETED
+        container.runtime.history.record(execution)
+    else:
+        from app.runtime.executor import GraphExecutor
+        executor = GraphExecutor(max_workers=2)
+        executor.execute_graph(graph)
+
+    # Append assistant's tool call request to history
+    assistant_msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tool_calls,
+    }
+    conversation_history.append(assistant_msg)
+
+    # Append each tool result from executed tasks to history
+    from app.runtime.task import TaskStatus
+    for task in graph.tasks.values():
+        if task.tool_name:
+            tool_calls_made.append(task.tool_name)
+            
+            # Cache recommendations if returned
+            if task.tool_name == "recommend" and isinstance(task.result, list):
+                session.last_recommendations = task.result
+                
+            tool_msg = {
+                "role": "tool",
+                "tool_call_id": task.id,
+                "name": task.tool_name,
+                "content": json.dumps(task.result) if not isinstance(task.result, str) else task.result,
+            }
+            conversation_history.append(tool_msg)
+
+    # Call LLMRouter again to generate the final grounded response
+    messages_to_send = [{"role": "system", "content": base_prompt}] + conversation_history
+    req2 = LLMRequest(
+        messages=messages_to_send,
+        model=target_model,
+        temperature=0.3,
+        task_type=plan.intent
+    )
+    
+    try:
+        res_obj2 = LLMRouter.complete(req2)
+        final_reply = res_obj2.content or ""
+    except Exception as exc:
+        final_reply = f"Error: {exc}"
+        
+    conversation_history.append({"role": "assistant", "content": final_reply})
+    session.planning_metrics["successful_plans"] += 1
     return {
-        "reply": f"Warning: Reasoning loop exceeded max rounds ({max_rounds}). Returning current state.",
+        "reply": final_reply,
         "updated_history": conversation_history,
-        "tool_calls_made": tool_calls_made,
+        "tool_calls_made": tool_calls_made
     }

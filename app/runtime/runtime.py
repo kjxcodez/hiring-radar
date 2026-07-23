@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any, Optional, List
-import logging
+import logging, uuid, datetime
 
 from app.runtime.state import ExecutionStatus
 from app.runtime.triggers import TriggerSource
@@ -9,6 +9,9 @@ from app.runtime.queue import JobQueue
 from app.runtime.scheduler import Scheduler
 from app.runtime.locks import LockManager
 from app.runtime.history import ExecutionHistory
+from app.runtime.task import TaskGraph
+from app.runtime.recovery import RecoveryEngine
+from app.runtime.worker import Worker
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,17 @@ class ExecutionRuntime:
         self.locks = LockManager(output_dir / "locks")
         self.history = ExecutionHistory(output_dir / "executions.json")
         
-        from app.runtime.worker import Worker
+        # Crash recovery engine initialization
+        self.recovery = RecoveryEngine(output_dir)
+        self.active_graphs = {}
+        
+        # Auto-resume recovered state if enabled
+        recovered = self.recovery.load_state()
+        if recovered and getattr(settings, "auto_resume", True):
+            for gid, graph in recovered.items():
+                self.active_graphs[gid] = graph
+                logger.info("Recovered active task graph execution: %s", gid)
+
         self.worker = Worker(self)
 
     @property
@@ -83,7 +96,6 @@ class ExecutionRuntime:
         Returns:
             The output result of the executed workflow.
         """
-        import uuid
         exec_id = context.execution_id if context else str(uuid.uuid4())
         execution = Execution(
             id=exec_id,
@@ -93,7 +105,6 @@ class ExecutionRuntime:
             metadata=kwargs,
         )
         
-        import datetime
         execution.started_at = datetime.datetime.utcnow()
         self.history.record(execution)
         
@@ -145,7 +156,6 @@ class ExecutionRuntime:
 
     def cancel(self, execution_id: str) -> bool:
         """Cancel a running or queued execution by ID."""
-        import datetime
         
         # 1. Cancel in queue
         if self.queue.cancel(execution_id):
@@ -169,9 +179,63 @@ class ExecutionRuntime:
             
         return False
 
-    def resume(self, execution_id: str) -> Any:
-        """Resume execution. Currently unsupported."""
-        raise NotImplementedError("Workflow resumption is not supported in this version.")
+    def submit_graph(self, graph: TaskGraph, priority: int = 0) -> Execution:
+        """Enqueue a TaskGraph execution."""
+        from app.runtime.execution import Execution
+        from app.runtime.state import ExecutionStatus
+        execution = Execution(
+            workflow_name=f"graph_{graph.graph_id}",
+            status=ExecutionStatus.QUEUED,
+            task_graph=graph
+        )
+        self.history.record(execution)
+        self.queue.enqueue(execution, priority=priority)
+        
+        self.active_graphs[graph.graph_id] = graph
+        self.recovery.save_state(self.active_graphs)
+        return execution
+
+    def pause(self, execution_id: str) -> bool:
+        """Pause a running or queued task graph execution."""
+        from app.runtime.task import TaskStatus
+        execution = self.queue.get_execution(execution_id)
+        if not execution:
+            execution = self.history.find_by_id(execution_id)
+        if not execution:
+            return False
+            
+        execution.status = ExecutionStatus.PAUSED
+        self.history.record(execution)
+        
+        self.queue.enqueue(execution, priority=execution.metadata.get("priority", 0))
+        if execution.task_graph:
+            self.active_graphs[execution.task_graph.graph_id] = execution.task_graph
+            for task in execution.task_graph.tasks.values():
+                if task.status in (TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING):
+                    task.status = TaskStatus.PAUSED
+            self.recovery.save_state(self.active_graphs)
+        return True
+
+    def resume(self, execution_id: str) -> bool:
+        """Resume a paused execution graph."""
+        from app.runtime.task import TaskStatus
+        execution = self.queue.get_execution(execution_id)
+        if not execution:
+            execution = self.history.find_by_id(execution_id)
+        if not execution:
+            return False
+            
+        execution.status = ExecutionStatus.QUEUED
+        self.history.record(execution)
+        
+        self.queue.enqueue(execution, priority=execution.metadata.get("priority", 0))
+        if execution.task_graph:
+            self.active_graphs[execution.task_graph.graph_id] = execution.task_graph
+            for task in execution.task_graph.tasks.values():
+                if task.status == TaskStatus.PAUSED:
+                    task.status = TaskStatus.PENDING
+            self.recovery.save_state(self.active_graphs)
+        return True
 
     def status(self, execution_id: str) -> Optional[Execution]:
         """Find execution record by ID."""

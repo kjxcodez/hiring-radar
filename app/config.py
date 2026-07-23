@@ -141,6 +141,20 @@ class MemoryConfig(BaseModel):
     auto_archive: bool = True
 
 
+class RuntimeConfig(BaseModel):
+    """Configuration for Autonomous Agent Runtime."""
+    enabled: bool = True
+    max_parallel_tasks: int = 4
+    retry_limit: int = 3
+    task_timeout_seconds: int = 300
+    auto_resume: bool = True
+    persist_queue: bool = True
+    scheduler_enabled: bool = True
+    background_workers: int = 2
+    event_history_limit: int = 5000
+    execution_strategy: str = "parallel"
+
+
 class YamlConfig(BaseModel):
     """User preferences loaded from a non-secret config.yaml file."""
     default_profile: str = "frontend"
@@ -151,6 +165,7 @@ class YamlConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
 
 def load_yaml_config(path: Path = Path("config.yaml")) -> YamlConfig:
