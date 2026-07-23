@@ -96,10 +96,10 @@ app.command(name="score-company")(score_company_cli)
 app.command(name="tailor")(tailor_cli)
 
 # 23. Dashboard, 24. Mcp-serve, 25. Agent
-from app.cli.commands.system import view_dashboard, mcp_serve, agent
+from app.cli.commands.system import view_dashboard, mcp_serve, agent_app
 app.command(name="dashboard")(view_dashboard)
 app.command(name="mcp-serve")(mcp_serve)
-app.command(name="agent")(agent)
+app.add_typer(agent_app, name="agent")
 
 # 26. Background Jobs
 jobs_app = typer.Typer(

@@ -135,7 +135,7 @@ def show_agent_dashboard(session: Any) -> None:
     from rich.panel import Panel
     from rich.text import Text
     from app.cli.common import console, get_container
-    from app.config import settings
+    from app.config import settings, yaml_config
 
     container = get_container()
     
@@ -144,7 +144,7 @@ def show_agent_dashboard(session: Any) -> None:
     if settings.resume_path and settings.resume_path.exists():
         session.loaded_resume = settings.resume_path
 
-    # 2. Database statistics
+    # 2. Database statistics directly from repositories
     try:
         companies_count = len(container.company_repo.load_all())
         jobs_count = sum(len(c.jobs) for c in container.company_repo.load_all())
@@ -161,27 +161,87 @@ def show_agent_dashboard(session: Any) -> None:
         alerts_count = len(container.monitoring_repo.load_alerts())
     except Exception:
         alerts_count = 0
+
+    try:
+        recs_count = len(container.recommendation_repo.load_recommendations())
+    except Exception:
+        recs_count = 0
     
     # 3. Memory status
     memory_path = settings.output_dir / "agent_memory.json"
     memory_status = "[bold green]Enabled[/bold green]" if memory_path.exists() else "[bold yellow]Inactive[/bold yellow]"
 
+    # 4. Database Status Check
+    db_status = "[bold green]Integral[/bold green]" if companies_count > 0 or apps_count > 0 else "[bold yellow]Empty[/bold yellow]"
+
+    # 5. AI Provider and Debug Mode
+    ai_provider = settings.openrouter_model or "OpenRouter Default"
+    debug_mode = "[bold red]ON[/bold red]" if yaml_config.agent.show_debug_logs else "[bold green]OFF[/bold green]"
+
     dashboard_text = (
         f"[bold purple]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold purple]\n\n"
         f"                   [bold white]🤖 Hiring Radar AI Agent[/bold white]\n\n"
-        f"  [bold cyan]Resume:[/bold cyan]       {resume_status}\n"
-        f"  [bold cyan]Companies:[/bold cyan]    {companies_count}\n"
-        f"  [bold cyan]Jobs:[/bold cyan]         {jobs_count}\n"
-        f"  [bold cyan]Applications:[/bold cyan] {apps_count}\n"
-        f"  [bold cyan]Alerts:[/bold cyan]       {alerts_count}\n"
-        f"  [bold cyan]Memory:[/bold cyan]       {memory_status}\n\n"
+        f"  [bold cyan]Resume:[/bold cyan]          {resume_status}\n"
+        f"  [bold cyan]Companies:[/bold cyan]       {companies_count}\n"
+        f"  [bold cyan]Jobs:[/bold cyan]            {jobs_count}\n"
+        f"  [bold cyan]Applications:[/bold cyan]    {apps_count}\n"
+        f"  [bold cyan]Recommendations:[/bold cyan] {recs_count}\n"
+        f"  [bold cyan]Alerts:[/bold cyan]          {alerts_count}\n"
+        f"  [bold cyan]Memory:[/bold cyan]          {memory_status}\n"
+        f"  [bold cyan]Database Status:[/bold cyan] {db_status}\n"
+        f"  [bold cyan]AI Provider:[/bold cyan]     [dim]{ai_provider}[/dim]\n"
+        f"  [bold cyan]Debug Mode:[/bold cyan]      {debug_mode}\n\n"
         f"  Type [bold yellow]help[/bold yellow] for examples. Type [bold red]exit[/bold red] to quit.\n\n"
         f"[bold purple]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold purple]"
     )
     console.print(dashboard_text)
 
 
+agent_app = typer.Typer(
+    name="agent",
+    help="Start an interactive terminal reasoning agent loop (REPL) or run diagnostics.",
+    no_args_is_help=False,
+)
+
+
+@agent_app.command(name="doctor")
+def agent_doctor() -> None:
+    """Check health, api keys, configuration files, and cross-repository consistency."""
+    from app.debug.diagnostics import run_doctor
+    run_doctor()
+
+
+@agent_app.command(name="diagnostics")
+def agent_diagnostics() -> None:
+    """Check health, api keys, configuration files, and cross-repository consistency."""
+    from app.debug.diagnostics import run_doctor
+    run_doctor()
+
+
+@agent_app.command(name="inspect-logging")
+def agent_inspect_logging() -> None:
+    """Display programmatic audit report of active loggers, propagation, and handlers."""
+    from app.debug.logging_inspector import inspect_logging_infrastructure
+    console.print(inspect_logging_infrastructure())
+
+
+@agent_app.command(name="inspect-repositories")
+def agent_inspect_repositories() -> None:
+    """Scan and verify sizes, counts, and integrity statuses of database stores."""
+    from app.debug.diagnostics import inspect_repositories
+    inspect_repositories()
+
+
+@agent_app.command(name="inspect-memory")
+def agent_inspect_memory() -> None:
+    """Print the contents of the persistent AI Agent memory database."""
+    from app.debug.diagnostics import inspect_memory_state
+    inspect_memory_state()
+
+
+@agent_app.callback(invoke_without_command=True)
 def agent(
+    ctx: typer.Context,
     model: Annotated[
         Optional[str],
         typer.Option(
@@ -191,6 +251,10 @@ def agent(
     ] = None,
 ) -> None:
     """Start an interactive terminal reasoning agent loop (REPL)."""
+    # Check if a subcommand was invoked. If so, don't start the REPL.
+    if ctx.invoked_subcommand is not None:
+        return
+
     # Lazy loaded to avoid importing heavy LLM / OpenRouter files during quick commands
     from app.agent.planner import run_agent_turn
     from app.agent.session import AgentSession
@@ -218,6 +282,12 @@ def agent(
     container.workflow_engine.register_event_listener(renderer.handle_event)
 
     while True:
+        # Run state validation and raise warnings if inconsistencies exist
+        from app.agent.state_validator import validate_system_state
+        warnings = validate_system_state()
+        for w in warnings:
+            console.print(f"[bold yellow]⚠️ System State Warning:[/bold yellow] {w}")
+
         try:
             user_msg = Prompt.ask("\n[bold cyan]Agent[/bold cyan]")
         except (KeyboardInterrupt, EOFError):

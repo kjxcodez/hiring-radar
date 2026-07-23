@@ -494,6 +494,125 @@ except Exception as err:
     logger.warning("Skipped registering tool 'reject_company': %s", err)
 
 
+# -- TOOL: list_applications --
+try:
+    def _list_applications_wrapper() -> list[dict]:
+        try:
+            container = get_container()
+            apps = container.application_repo.load_all()
+            result = []
+            for app in apps:
+                # Handle dict or Pydantic record
+                is_dict = isinstance(app, dict)
+                
+                co_name = "Unknown"
+                co = app.get("company") if is_dict else getattr(app, "company", None)
+                if co:
+                    co_name = co.get("name", "Unknown") if isinstance(co, dict) else getattr(co, "name", "Unknown")
+                else:
+                    # Fallback to key or direct properties
+                    co_name = app.get("company_key", "Unknown") if is_dict else getattr(app, "company_key", "Unknown")
+
+                job_title = "Role"
+                job = app.get("job") if is_dict else getattr(app, "job", None)
+                if job:
+                    job_title = job.get("job_title", "Role") if isinstance(job, dict) else getattr(job, "job_title", "Role")
+
+                status = app.get("status") if is_dict else getattr(app, "status", "Unknown")
+                next_followup = app.get("next_followup") if is_dict else getattr(app, "next_followup", None)
+                
+                result.append({
+                    "company_name": co_name,
+                    "job_title": job_title,
+                    "status": status,
+                    "next_followup": next_followup,
+                })
+            return result
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Failed to load applications: {exc}"}
+
+    TOOL_REGISTRY["list_applications"] = AgentTool(
+        name="list_applications",
+        description="Retrieve all tracked applications in the CRM tracking database along with status and next follow-up dates.",
+        parameters_schema={"type": "object", "properties": {}},
+        fn=_list_applications_wrapper
+    )
+except Exception as err:
+    logger.warning("Skipped registering tool 'list_applications': %s", err)
+
+
+# -- TOOL: list_alerts --
+try:
+    def _list_alerts_wrapper(limit: int = 20) -> list[dict]:
+        try:
+            container = get_container()
+            alerts = container.monitoring_repo.load_alerts()
+            result = []
+            for alert in alerts[:limit]:
+                if isinstance(alert, dict):
+                    result.append(alert)
+                else:
+                    result.append(alert.model_dump(mode="json"))
+            return result
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Failed to load alerts: {exc}"}
+
+    TOOL_REGISTRY["list_alerts"] = AgentTool(
+        name="list_alerts",
+        description="Retrieve active monitoring alerts and detected hiring update events.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max alerts to fetch. Default: 20.",
+                    "default": 20
+                }
+            }
+        },
+        fn=_list_alerts_wrapper
+    )
+except Exception as err:
+    logger.warning("Skipped registering tool 'list_alerts': %s", err)
+
+
+# -- TOOL: list_companies --
+try:
+    def _list_companies_wrapper(limit: int = 50) -> list[dict]:
+        try:
+            container = get_container()
+            companies = container.company_repo.load_all()
+            result = []
+            for co in companies[:limit]:
+                co_dict = co.model_dump(mode="json")
+                co_dict.pop("ai_talking_points", None)
+                co_dict.pop("research_notes", None)
+                result.append(co_dict)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Failed to load companies: {exc}"}
+
+    TOOL_REGISTRY["list_companies"] = AgentTool(
+        name="list_companies",
+        description="Retrieve recently discovered or researched companies and their open roles.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max companies to fetch. Default: 50.",
+                    "default": 50
+                }
+            }
+        },
+        fn=_list_companies_wrapper
+    )
+except Exception as err:
+    logger.warning("Skipped registering tool 'list_companies': %s", err)
+
+
+
+
 def execute_approved_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a side-effecting tool after explicit human approval."""
     if tool_name not in TOOL_REGISTRY:
