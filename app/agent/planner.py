@@ -94,8 +94,9 @@ def build_agent_system_prompt(session: AgentSession | None = None) -> str:
     # Query physical repositories for real-time state synchronization
     container = get_container()
     
-    resume_exists = settings.resume_path and settings.resume_path.exists()
-    resume_status = f"Loaded ({settings.resume_path.name})" if resume_exists else "Not Loaded"
+    resume_exists = (settings.resume_path and settings.resume_path.is_file()) or (session and session.loaded_resume)
+    resume_name = settings.resume_path.name if (settings.resume_path and settings.resume_path.is_file()) else (session.loaded_resume.name if (session and session.loaded_resume) else "Unknown")
+    resume_status = f"Loaded ({resume_name})" if resume_exists else "Not Loaded"
     
     try:
         companies = container.company_repo.load_all()
