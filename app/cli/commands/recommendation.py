@@ -1,6 +1,6 @@
 """AI Recommendation CLI command group definitions for Typer."""
 
-from __future__ import annotations
+
 
 from datetime import datetime
 import os
@@ -25,7 +25,7 @@ recommend_app = typer.Typer(
 
 @recommend_app.callback(invoke_without_command=True)
 def recommend_cli(
-    ctx: Optional[typer.Context] = None,
+    ctx: typer.Context,
     input: Annotated[
         Path,
         typer.Option(

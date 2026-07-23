@@ -59,7 +59,7 @@ class TestRecommend(unittest.TestCase):
         ]
 
         # Call with no resume path
-        recommend_cli(top=3, resume=None)
+        recommend_cli(None, top=3, resume=None)
 
         # Retrieve the rendered Table from console.print
         calls = mock_console.print.call_args_list

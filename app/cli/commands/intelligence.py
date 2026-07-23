@@ -1,6 +1,4 @@
-"""Company Intelligence CLI command group definitions for Typer."""
-
-from __future__ import annotations
+"""Company Intelligence CLI command definitions."""
 
 from typing import Annotated, Dict, Optional
 import typer
@@ -26,7 +24,7 @@ def intelligence_default(
     ] = False,
 ) -> None:
     """Enrich all companies and rebuild the Knowledge Graph."""
-    if ctx.invoked_subcommand is not None:
+    if ctx is not None and ctx.invoked_subcommand is not None:
         return
 
     container = get_container()

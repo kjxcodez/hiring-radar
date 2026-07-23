@@ -1,7 +1,5 @@
 """Sync CLI command group definitions for Typer."""
 
-from __future__ import annotations
-
 import asyncio
 from datetime import datetime
 from typing import Annotated, Optional

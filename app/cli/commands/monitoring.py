@@ -1,7 +1,5 @@
 """Hiring Intelligence Monitoring CLI commands."""
 
-from __future__ import annotations
-
 import typer
 from rich.table import Table
 from rich.panel import Panel
