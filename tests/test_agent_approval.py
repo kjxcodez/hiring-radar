@@ -43,35 +43,29 @@ class TestAgentApproval(unittest.TestCase):
         self.tools_settings_patcher.stop()
 
     @patch("app.agent.planner.settings")
-    @patch("app.agent.planner._post_with_retry")
-    def test_run_agent_turn_approval_blocks_execution(self, mock_post, mock_settings):
+    @patch("app.llm.router.LLMRouter.complete")
+    def test_run_agent_turn_approval_blocks_execution(self, mock_complete, mock_settings):
         # Configure settings mock
         mock_settings.openrouter_api_key = "fake_key"
         mock_settings.openrouter_model = "fake_model"
 
         # Model requests apply_to_company (which is side_effecting=True)
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [
+        from app.llm.models import LLMResponse
+        mock_complete.return_value = LLMResponse(
+            content=None,
+            tool_calls=[
                 {
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_apply",
-                                "type": "function",
-                                "function": {
-                                    "name": "apply_to_company",
-                                    "arguments": "{\"company_name\": \"Stark Industries\", \"status\": \"applied\"}"
-                                }
-                            }
-                        ]
+                    "id": "call_apply",
+                    "type": "function",
+                    "function": {
+                        "name": "apply_to_company",
+                        "arguments": "{\"company_name\": \"Stark Industries\", \"status\": \"applied\"}"
                     }
                 }
-            ]
-        }
-        mock_post.return_value = mock_resp
+            ],
+            provider="openai",
+            model="fake_model"
+        )
 
         # Spy on tool implementation
         mock_tool = MagicMock()

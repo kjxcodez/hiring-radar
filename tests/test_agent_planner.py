@@ -11,25 +11,19 @@ from app.agent.planner import run_agent_turn
 
 class TestAgentPlanner(unittest.TestCase):
     @patch("app.agent.planner.settings")
-    @patch("app.agent.planner._post_with_retry")
-    def test_run_agent_turn_direct_reply(self, mock_post, mock_settings):
+    @patch("app.llm.router.LLMRouter.complete")
+    def test_run_agent_turn_direct_reply(self, mock_complete, mock_settings):
         # Configure mocks
         mock_settings.openrouter_api_key = "fake_key"
         mock_settings.openrouter_model = "fake_model"
 
         # Mock direct text completion response
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello! I can help you with that."
-                    }
-                }
-            ]
-        }
-        mock_post.return_value = mock_resp
+        from app.llm.models import LLMResponse
+        mock_complete.return_value = LLMResponse(
+            content="Hello! I can help you with that.",
+            provider="openai",
+            model="fake_model"
+        )
 
         conversation_history = []
         result = run_agent_turn(
@@ -46,49 +40,38 @@ class TestAgentPlanner(unittest.TestCase):
 
     @patch("app.agent.planner.TOOL_REGISTRY")
     @patch("app.agent.planner.settings")
-    @patch("app.agent.planner._post_with_retry")
-    def test_run_agent_turn_with_tool_call(self, mock_post, mock_settings, mock_registry):
+    @patch("app.llm.router.LLMRouter.complete")
+    def test_run_agent_turn_with_tool_call(self, mock_complete, mock_settings, mock_registry):
         # Configure mocks
         mock_settings.openrouter_api_key = "fake_key"
         mock_settings.openrouter_model = "fake_model"
 
         # Round 1: Model requests a tool call
-        mock_resp_1 = MagicMock()
-        mock_resp_1.json.return_value = {
-            "choices": [
+        from app.llm.models import LLMResponse
+        res_1 = LLMResponse(
+            content=None,
+            tool_calls=[
                 {
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "get_company",
-                                    "arguments": "{\"name\": \"Test Co\"}"
-                                }
-                            }
-                        ]
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_company",
+                        "arguments": "{\"name\": \"Test Co\"}"
                     }
                 }
-            ]
-        }
+            ],
+            provider="openai",
+            model="fake_model"
+        )
 
         # Round 2: Model gives final reply incorporating tool result
-        mock_resp_2 = MagicMock()
-        mock_resp_2.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "I found details for Test Co."
-                    }
-                }
-            ]
-        }
+        res_2 = LLMResponse(
+            content="I found details for Test Co.",
+            provider="openai",
+            model="fake_model"
+        )
 
-        mock_post.side_effect = [mock_resp_1, mock_resp_2]
+        mock_complete.side_effect = [res_1, res_2]
 
         # Mock tool registry implementation
         mock_tool = MagicMock()
