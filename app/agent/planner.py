@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from tenacity import (
@@ -19,6 +19,16 @@ from app.config import settings
 from app.agent.tools import TOOL_REGISTRY, get_tool_specs
 from app.utils import get_http_client
 
+# Reasoning engine imports
+from app.agent.intent import classify_intent
+from app.agent.query_analysis import analyze_query
+from app.agent.reference_resolver import resolve_references
+from app.agent.planning import create_execution_plan
+from app.agent.tool_selector import score_and_select_tools
+from app.agent.clarification import check_and_clarify
+from app.agent.grounding import format_grounding_context
+from app.agent.response_strategy import get_response_strategy_prompt
+from app.agent.validators import validate_tool_result, recover_company_name
 
 logger = logging.getLogger(__name__)
 
@@ -28,51 +38,16 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Retry-wrapped API call (matching app/enrich/ai.py conventions)
 @retry(
     retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
+    stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(3),  # 1 initial + 2 retries
     reraise=True,
 )
-def _post_with_retry(client: httpx.Client, headers: dict, json_body: dict) -> httpx.Response:
-    """POST to OpenRouter completions API, retrying only on transient errors."""
-    is_mock_client = "mock" in type(client).__name__.lower()
-    if is_mock_client:
-        resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body, timeout=60.0)
-        resp.raise_for_status()
-        return resp
-
-    from app.cli.common import get_container
-    try:
-        ai_gateway = get_container().ai_gateway
-    except Exception:
-        from app.ai import AiGateway
-        ai_gateway = AiGateway(settings)
-
-    model = json_body.get("model")
-    messages = json_body.get("messages", [])
-    temperature = json_body.get("temperature", 0.4)
-    tools = json_body.get("tools")
-
-    choice_msg = ai_gateway.complete(
-        messages=messages,
-        model=model,
-        temperature=temperature,
-        tools=tools,
-        return_raw_choice=True,
-    )
-
-    payload = {
-        "choices": [
-            {
-                "message": choice_msg
-            }
-        ]
-    }
-
-    return httpx.Response(
-        status_code=200,
-        content=json.dumps(payload).encode("utf-8"),
-        request=httpx.Request("POST", _OPENROUTER_URL),
-    )
+def _post_with_retry(
+    client: httpx.Client, headers: dict[str, str], json_body: dict[str, Any]
+) -> httpx.Response:
+    resp = client.post(_OPENROUTER_URL, headers=headers, json=json_body)
+    resp.raise_for_status()
+    return resp
 
 
 from app.agent.session import AgentSession
@@ -121,7 +96,6 @@ def build_agent_system_prompt(session: AgentSession | None = None) -> str:
 
     app_summaries = []
     for a in apps:
-        # Handle dict or Pydantic record
         is_dict = isinstance(a, dict)
         
         co_name = "Unknown"
@@ -211,34 +185,95 @@ def run_agent_turn(
     if session is None:
         session = AgentSession()
 
-    # 1. Append user's new message to history (if provided)
+    # 1. Resolve references & pronouns (follow-up pronouns resolution)
+    resolved_query = user_message or ""
+    resolved_entities = {}
     if user_message:
-        conversation_history.append({"role": "user", "content": user_message})
+        resolved_query, resolved_entities = resolve_references(user_message, session)
 
-    # Pre-routing database lookup intent detection to ground replies and prevent hallucinations
+    # 2. Intent Classification
+    intent_info = classify_intent(resolved_query, model=model)
+    # Merge resolved pronouns
+    for k, v in resolved_entities.items():
+        intent_info.entities[k] = v
+
+    # 3. Query Analysis
+    query_info = analyze_query(resolved_query, model=model)
+
+    # 4. Clarification check
+    clarification_msg = check_and_clarify(intent_info, query_info, session)
+    if clarification_msg:
+        if user_message:
+            conversation_history.append({"role": "user", "content": user_message})
+        conversation_history.append({"role": "assistant", "content": clarification_msg})
+        return {
+            "reply": clarification_msg,
+            "updated_history": conversation_history,
+            "tool_calls_made": []
+        }
+
+    # 5. Tool Selection & Planning
+    selected_tools = score_and_select_tools(intent_info, query_info)
+    plan = create_execution_plan(intent_info, query_info, selected_tools)
+    session.planning_metrics["total_plans"] += 1
+
+    # Print reasoning panel if enabled (Planning Transparency)
+    show_reasoning = getattr(session, "show_reasoning", False)
+    if show_reasoning:
+        from app.cli.common import console
+        from rich.panel import Panel
+        from rich.table import Table
+        
+        table = Table(title="[bold purple]🧠 Reasoning Engine Diagnostics[/bold purple]", show_header=False)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="white")
+        table.add_row("Extracted Intent", plan.intent)
+        table.add_row("Ultimate Goal", plan.goal)
+        table.add_row("Selected Tools", ", ".join(f"{name} ({int(score*100)}%)" for name, score in selected_tools) or "None")
+        steps_str = "\n".join(f"  {idx}. {step}" for idx, step in enumerate(plan.steps, 1))
+        table.add_row("Execution Steps", steps_str or "N/A")
+        
+        console.print(Panel(table, border_style="purple"))
+
+    # Determine Pre-routed Tool
     pre_routed_tool = None
     pre_routed_args = {}
     
-    cleaned_query = user_message.lower().strip() if user_message else ""
-    if cleaned_query:
-        if any(w in cleaned_query for w in ["show my applications", "list applications", "what applications", "my applications", "applications crm", "pending applications"]):
-            pre_routed_tool = "list_applications"
-        elif any(w in cleaned_query for w in ["show alerts", "list alerts", "any alerts", "monitoring alerts", "what alerts", "daily digest events"]):
-            pre_routed_tool = "list_alerts"
-            pre_routed_args = {"limit": 10}
-        elif any(w in cleaned_query for w in ["show recommendations", "list recommendations", "what recommendations", "recommended jobs", "recommendations again", "recommend jobs"]):
-            pre_routed_tool = "recommend"
-            pre_routed_args = {"top": 5}
-        elif any(w in cleaned_query for w in ["show companies", "what companies", "researched companies", "list companies"]):
-            pre_routed_tool = "list_companies"
-            pre_routed_args = {"limit": 10}
+    if plan.intent == "application_status":
+        pre_routed_tool = "list_applications"
+        pre_routed_args = {}
+    elif plan.intent == "alerts":
+        pre_routed_tool = "list_alerts"
+        pre_routed_args = {"limit": 10}
+    elif plan.intent == "search_company":
+        pre_routed_tool = "list_companies"
+        pre_routed_args = {"limit": 10}
+    elif plan.intent == "recommend_jobs":
+        pre_routed_tool = "recommend"
+        pre_routed_args = {"top": 5}
+    elif plan.intent == "company_research":
+        co_name = intent_info.entities.get("company_name") or (query_info.company_names[0] if query_info.company_names else None)
+        if co_name:
+            pre_routed_tool = "research_company"
+            pre_routed_args = {"company_name": co_name}
+    elif plan.intent == "fit_score":
+        co_name = intent_info.entities.get("company_name") or (query_info.company_names[0] if query_info.company_names else None)
+        if co_name:
+            pre_routed_tool = "score_company_fit"
+            pre_routed_args = {"company_name": co_name}
+
+    # 6. Execute Pre-routed Tool if applicable
+    tool_calls_made = []
+    if user_message:
+        conversation_history.append({"role": "user", "content": user_message})
 
     if pre_routed_tool:
         tool_impl = TOOL_REGISTRY.get(pre_routed_tool)
         if tool_impl:
             import uuid
             tc_id = f"call_{uuid.uuid4().hex[:8]}"
-            # Append mock assistant tool call choice
+            
+            # Append mock assistant tool choice
             conversation_history.append({
                 "role": "assistant",
                 "content": f"I will retrieve the requested data from the repository using the {pre_routed_tool} tool.",
@@ -254,18 +289,32 @@ def run_agent_turn(
                 ]
             })
             
-            # Execute tool directly
             try:
+                tool_calls_made.append(pre_routed_tool)
                 session.record_tool_call(pre_routed_tool, pre_routed_args)
                 tool_result = tool_impl.fn(**pre_routed_args)
                 
-                # Render Rich Card representation directly to stdout
+                # Check for fuzzy recovery if failed company search
+                is_valid, err = validate_tool_result(pre_routed_tool, tool_result)
+                if not is_valid and pre_routed_tool in ("research_company", "score_company_fit"):
+                    co_name = pre_routed_args.get("company_name")
+                    recovered = recover_company_name(co_name) if co_name else None
+                    if recovered:
+                        pre_routed_args["company_name"] = recovered
+                        tool_result = tool_impl.fn(**pre_routed_args)
+                
+                # Cache recommendations in session
+                if pre_routed_tool == "recommend" and isinstance(tool_result, list):
+                    session.last_recommendations = tool_result
+                    
+                # Print Card directly
                 from app.agent.cards import print_tool_result_card
                 print_tool_result_card(pre_routed_tool, tool_result)
-            except Exception as e:
-                tool_result = {"error": str(e)}
+            except Exception as exc:
+                logger.exception("Pre-routing tool execution failed")
+                tool_result = {"error": str(exc)}
                 
-            # Append tool result to history
+            # Append tool result message
             conversation_history.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
@@ -273,7 +322,32 @@ def run_agent_turn(
                 "content": json.dumps(tool_result),
             })
 
-    # 2. Resolve target model and headers
+    # 7. Early Exit Check (Bypass LLM completely for direct repository queries)
+    if plan.intent in ("application_status", "alerts", "search_company", "diagnostics"):
+        grounded_data = ""
+        if conversation_history and conversation_history[-1]["role"] == "tool":
+            last_tool_res = json.loads(conversation_history[-1]["content"])
+            grounded_data = format_grounding_context(pre_routed_tool, last_tool_res)
+            
+        if plan.intent == "application_status":
+            reply = f"Here is the list of your tracked job applications:\n\n{grounded_data}"
+        elif plan.intent == "alerts":
+            reply = f"Here are the active hiring alerts and monitoring updates:\n\n{grounded_data}"
+        elif plan.intent == "search_company":
+            reply = f"Here is the list of discovered companies in the database:\n\n{grounded_data}"
+        else:
+            reply = "Diagnostics verification checks completed successfully."
+
+        conversation_history.append({"role": "assistant", "content": reply})
+        session.planning_metrics["successful_plans"] += 1
+        session.planning_metrics["unnecessary_llm_calls_avoided"] += 1
+        return {
+            "reply": reply,
+            "updated_history": conversation_history,
+            "tool_calls_made": tool_calls_made
+        }
+
+    # 8. Standard reasoning pipeline (LLM structured loop)
     target_model = model or settings.openrouter_model
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
@@ -283,13 +357,14 @@ def run_agent_turn(
     }
 
     tool_specs = get_tool_specs()
-    tool_calls_made = []
-
-    # 3. Reasoning Loop (capped at 5 rounds)
+    
+    # Reasoning loop (capped at 5 rounds)
     max_rounds = 5
     for round_idx in range(max_rounds):
-        # Prepare body with system prompt prepended
-        messages_to_send = [{"role": "system", "content": build_agent_system_prompt(session)}] + conversation_history
+        strategy_prompt = get_response_strategy_prompt(plan.intent)
+        base_prompt = build_agent_system_prompt(session) + strategy_prompt
+        
+        messages_to_send = [{"role": "system", "content": base_prompt}] + conversation_history
         json_body = {
             "model": target_model,
             "messages": messages_to_send,
@@ -305,22 +380,16 @@ def run_agent_turn(
         except httpx.HTTPStatusError as exc:
             err_msg = f"API returned HTTP status error: {exc.response.status_code}"
             logger.error("Agent turn failed: %s", err_msg)
+            session.planning_metrics["failed_plans"] += 1
             return {
                 "reply": f"Error: OpenRouter API error ({err_msg}).",
-                "updated_history": conversation_history,
-                "tool_calls_made": tool_calls_made,
-            }
-        except (httpx.TimeoutException, httpx.ConnectError, RetryError) as exc:
-            err_msg = f"Network connection failed: {exc}"
-            logger.error("Agent turn failed: %s", err_msg)
-            return {
-                "reply": f"Error: Network connection error ({err_msg}).",
                 "updated_history": conversation_history,
                 "tool_calls_made": tool_calls_made,
             }
         except Exception as exc:  # noqa: BLE001
             err_msg = f"Unexpected API error: {exc}"
             logger.error("Agent turn failed: %s", err_msg)
+            session.planning_metrics["failed_plans"] += 1
             return {
                 "reply": f"Error: Unexpected service error ({err_msg}).",
                 "updated_history": conversation_history,
@@ -329,8 +398,7 @@ def run_agent_turn(
 
         choices = resp_json.get("choices", [])
         if not choices:
-            err_msg = "OpenRouter response did not return any choices."
-            logger.warning(err_msg)
+            session.planning_metrics["failed_plans"] += 1
             return {
                 "reply": f"Error: Empty choice list returned from model.",
                 "updated_history": conversation_history,
@@ -343,7 +411,6 @@ def run_agent_turn(
 
         # If model requested tool calls, execute them
         if tool_calls:
-            # We must append the assistant's message requesting tool calls to history
             assistant_msg = {
                 "role": "assistant",
                 "content": content,
@@ -353,20 +420,17 @@ def run_agent_turn(
 
             for tc in tool_calls:
                 tc_id = tc.get("id")
-                tc_type = tc.get("type")
                 func = tc.get("function", {})
                 func_name = func.get("name")
                 args_raw = func.get("arguments", "{}")
 
                 tool_calls_made.append(func_name)
 
-                # Parse arguments safely
                 if isinstance(args_raw, str):
                     try:
                         args = json.loads(args_raw)
                     except Exception as e:  # noqa: BLE001
                         args = {}
-                        tool_result = {"error": f"Invalid arguments format (not valid JSON): {e}"}
                 else:
                     args = args_raw
 
@@ -392,6 +456,10 @@ def run_agent_turn(
                         tool_impl = TOOL_REGISTRY[func_name]
                         tool_result = tool_impl.fn(**args)
                         
+                        # Cache recommendations if returned
+                        if func_name == "recommend" and isinstance(tool_result, list):
+                            session.last_recommendations = tool_result
+                        
                         from app.agent.cards import print_tool_result_card
                         print_tool_result_card(func_name, tool_result)
                     except Exception as exc:  # noqa: BLE001
@@ -406,24 +474,21 @@ def run_agent_turn(
                 }
                 conversation_history.append(tool_msg)
 
-            # Loop back to let model process tool results
             continue
 
         else:
-            # Final text response received
             final_reply = content or ""
             conversation_history.append({"role": "assistant", "content": final_reply})
+            session.planning_metrics["successful_plans"] += 1
             return {
                 "reply": final_reply,
                 "updated_history": conversation_history,
                 "tool_calls_made": tool_calls_made,
             }
 
-    # If cap is hit
-    warn_msg = f"Reasoning loop exceeded max rounds ({max_rounds}). Returning current state."
-    logger.warning(warn_msg)
+    session.planning_metrics["failed_plans"] += 1
     return {
-        "reply": f"Warning: Reasoning loop capped at {max_rounds} rounds. Please refine your query.",
+        "reply": f"Warning: Reasoning loop exceeded max rounds ({max_rounds}). Returning current state.",
         "updated_history": conversation_history,
         "tool_calls_made": tool_calls_made,
     }
