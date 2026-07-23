@@ -39,7 +39,8 @@ def validate_system_state() -> list[str]:
 
     # 3. Application CRM references
     try:
-        apps = container.application_repo.load_all()
+        apps_data = container.application_repo.load_all()
+        apps = apps_data.values() if isinstance(apps_data, dict) else apps_data
     except Exception:
         apps = []
 

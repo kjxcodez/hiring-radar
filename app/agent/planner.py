@@ -104,7 +104,8 @@ def build_agent_system_prompt(session: AgentSession | None = None) -> str:
         companies = []
         
     try:
-        apps = container.application_repo.load_all()
+        apps_data = container.application_repo.load_all()
+        apps = apps_data.values() if isinstance(apps_data, dict) else apps_data
     except Exception:
         apps = []
         

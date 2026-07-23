@@ -499,7 +499,8 @@ try:
     def _list_applications_wrapper() -> list[dict]:
         try:
             container = get_container()
-            apps = container.application_repo.load_all()
+            apps_data = container.application_repo.load_all()
+            apps = apps_data.values() if isinstance(apps_data, dict) else apps_data
             result = []
             for app in apps:
                 # Handle dict or Pydantic record
