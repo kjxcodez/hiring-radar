@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # --- AI / LLM ---
     openrouter_api_key: str | None = None
     openrouter_model: str = "openrouter/free"
+    google_api_key: str | None = None
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    groq_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    ollama_base_url: str = "http://localhost:11434"
 
     # --- Output ---
     output_dir: Path = Path("output")
@@ -90,6 +96,18 @@ class AgentConfig(BaseModel):
     verbosity: str = "normal"
 
 
+class LLMConfig(BaseModel):
+    """Configuration for LLM Orchestration."""
+    default_provider: str = "google"
+    default_model: str = "gemini-2.5-flash"
+    timeout: int = 120
+    retries: int = 3
+    temperature: float = 0.2
+    max_tokens: int = 8000
+    stream: bool = True
+    fallback_chain: list[str] = ["google", "openrouter", "openai", "anthropic", "groq", "ollama"]
+
+
 class YamlConfig(BaseModel):
     """User preferences loaded from a non-secret config.yaml file."""
     default_profile: str = "frontend"
@@ -97,6 +115,7 @@ class YamlConfig(BaseModel):
     email: EmailConfig = Field(default_factory=EmailConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
 
 
 def load_yaml_config(path: Path = Path("config.yaml")) -> YamlConfig:

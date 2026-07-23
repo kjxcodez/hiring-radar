@@ -1,0 +1,19 @@
+routing:
+  intent_classifier:
+    provider: local
+  query_analysis:
+    provider: local
+  planner:
+    provider: google
+    model: gemini-2.5-flash
+  recommendation_summary:
+    provider: google
+    model: gemini-2.5-flash
+  company_research:
+    provider: google
+    model: gemini-2.5-flash
+  resume_analysis:
+    provider: google
+    model: gemini-2.5-flash
+  diagnostics:
+    provider: local
