@@ -19,3 +19,8 @@ def get_provider(name: str) -> Optional[BaseLLMProvider]:
     if not provider_cls:
         return None
     return provider_cls()
+
+
+# Force-load providers package to trigger registration
+import app.llm.providers  # noqa: F401
+

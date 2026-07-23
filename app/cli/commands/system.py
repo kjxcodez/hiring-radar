@@ -684,7 +684,7 @@ def agent(
                     if yaml_config.ui.streaming or yaml_config.ui.typing_effect:
                         words = res["reply"].split(" ")
                         for idx, w in enumerate(words):
-                            console.print(w, end=" ", flush=True)
+                            console.print(w, end=" ")
                             time.sleep(0.01)
                         console.print()
                     else:
