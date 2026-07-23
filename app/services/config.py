@@ -46,6 +46,9 @@ class ServiceContainer:
 
         # AI Infrastructure
         self.ai_gateway = AiGateway(self.settings)
+        # Enable AI caching by default using the configured output directory
+        self.ai_gateway.cache.cache_file = self.settings.output_dir / "ai_cache.json"
+        self.ai_gateway.cache.enable()
 
         # Repositories
         self.company_repo = CompanyRepository(self.settings.output_dir / "companies.json", storage=self.storage)
@@ -80,6 +83,8 @@ class ServiceContainer:
         self._intelligence_engine = None
         self._recommendation_engine = None
         self._recommendation_repo = None
+        self._outreach_engine = None
+        self._monitoring_engine = None
 
 
 
@@ -289,6 +294,7 @@ class ServiceContainer:
         self._recommendation_service = None
         self._dashboard_service = None
         self._health_service = None
+        self._workflow_engine = None
         self._runtime = None
         self._sync_engine = None
         self._intelligence_engine = None

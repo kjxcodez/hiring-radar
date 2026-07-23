@@ -15,10 +15,34 @@ class JsonStorage:
 
     def read(self, filepath: Path) -> Any:
         """Read and deserialize JSON data from the file."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         if not Filesystem.exists(filepath):
             return None
-        raw = Filesystem.read_bytes(filepath)
-        return deserialize(raw)
+        
+        try:
+            raw = Filesystem.read_bytes(filepath)
+            return deserialize(raw)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to read/deserialize primary file {filepath} (Error: {exc}). "
+                "Attempting recovery from backup..."
+            )
+            backup_path = filepath.with_suffix(filepath.suffix + ".backup")
+            if Filesystem.exists(backup_path):
+                try:
+                    raw_bak = Filesystem.read_bytes(backup_path)
+                    recovered = deserialize(raw_bak)
+                    logger.info(f"Successfully recovered dataset from backup file: {backup_path}")
+                    return recovered
+                except Exception as bak_exc:
+                    logger.error(
+                        f"Failed to read/deserialize backup file {backup_path} (Error: {bak_exc})."
+                    )
+            else:
+                logger.error(f"No backup file found at {backup_path} for recovery.")
+            raise exc
 
     def write(self, filepath: Path, data: Any, backup: bool = False) -> None:
         """Serialize and atomically write data to the file."""
