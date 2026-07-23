@@ -119,7 +119,13 @@ class GoogleProvider(BaseLLMProvider):
 
     def stream(self, request: LLMRequest) -> Iterator[StreamingChunk]:
         res = self.complete(request)
-        yield StreamingChunk(content=res.content, tool_calls=res.tool_calls, is_final=True)
+        if not res.content:
+            yield StreamingChunk(content=None, tool_calls=res.tool_calls, is_final=True)
+            return
+        words = res.content.split(" ")
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield StreamingChunk(content=chunk, is_final=(i == len(words) - 1))
 
     def is_healthy(self) -> bool:
         return bool(settings.google_api_key)

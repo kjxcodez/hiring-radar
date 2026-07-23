@@ -188,6 +188,19 @@ class LLMRouter:
         )
 
     @staticmethod
+    def stream(request: LLMRequest) -> Iterator[StreamingChunk]:
+        """Stream responses chunk-by-chunk with policy and fallback routing."""
+        res = LLMRouter.complete(request)
+        if not res.content:
+            yield StreamingChunk(content=None, tool_calls=res.tool_calls, is_final=True)
+            return
+
+        words = res.content.split(" ")
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield StreamingChunk(content=chunk, is_final=(i == len(words) - 1))
+
+    @staticmethod
     def _estimate_cost(provider: str, model: str, prompt: int, completion: int) -> float:
         """Estimate completion cost in USD."""
         rates = {
