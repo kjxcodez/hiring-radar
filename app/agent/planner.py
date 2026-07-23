@@ -365,49 +365,39 @@ def run_agent_turn(
         base_prompt = build_agent_system_prompt(session) + strategy_prompt
         
         messages_to_send = [{"role": "system", "content": base_prompt}] + conversation_history
-        json_body = {
-            "model": target_model,
-            "messages": messages_to_send,
-            "temperature": 0.3,
-        }
-        if tool_specs:
-            json_body["tools"] = tool_specs
-
+        
+        from app.llm.models import LLMRequest
+        from app.llm.router import LLMRouter
+        
+        req = LLMRequest(
+            messages=messages_to_send,
+            model=target_model,
+            temperature=0.3,
+            tools=tool_specs,
+            task_type=plan.intent
+        )
+        
         try:
-            with get_http_client() as client:
-                resp = _post_with_retry(client, headers, json_body)
-                resp_json = resp.json()
-        except httpx.HTTPStatusError as exc:
-            err_msg = f"API returned HTTP status error: {exc.response.status_code}"
+            res_obj = LLMRouter.complete(req)
+            content = res_obj.content
+            tool_calls = res_obj.tool_calls
+            
+            if content and content.startswith("Error:"):
+                session.planning_metrics["failed_plans"] += 1
+                return {
+                    "reply": content,
+                    "updated_history": conversation_history,
+                    "tool_calls_made": tool_calls_made,
+                }
+        except Exception as exc:
+            err_msg = f"LLM Routing failed: {exc}"
             logger.error("Agent turn failed: %s", err_msg)
             session.planning_metrics["failed_plans"] += 1
             return {
-                "reply": f"Error: OpenRouter API error ({err_msg}).",
+                "reply": f"Error: {err_msg}",
                 "updated_history": conversation_history,
                 "tool_calls_made": tool_calls_made,
             }
-        except Exception as exc:  # noqa: BLE001
-            err_msg = f"Unexpected API error: {exc}"
-            logger.error("Agent turn failed: %s", err_msg)
-            session.planning_metrics["failed_plans"] += 1
-            return {
-                "reply": f"Error: Unexpected service error ({err_msg}).",
-                "updated_history": conversation_history,
-                "tool_calls_made": tool_calls_made,
-            }
-
-        choices = resp_json.get("choices", [])
-        if not choices:
-            session.planning_metrics["failed_plans"] += 1
-            return {
-                "reply": f"Error: Empty choice list returned from model.",
-                "updated_history": conversation_history,
-                "tool_calls_made": tool_calls_made,
-            }
-
-        choice_message = choices[0].get("message", {})
-        content = choice_message.get("content")
-        tool_calls = choice_message.get("tool_calls")
 
         # If model requested tool calls, execute them
         if tool_calls:
